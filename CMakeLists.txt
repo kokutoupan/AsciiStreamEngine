@@ -10,7 +10,7 @@ if(UNIX)
 endif()
 
 # サーバー側
-add_executable(server server.cpp AsciiRasterizer.cpp)
+add_executable(server server.cpp)
 target_link_libraries(server ${LIBS})
 
 # クライアント側

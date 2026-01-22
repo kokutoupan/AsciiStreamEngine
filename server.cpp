@@ -12,28 +12,50 @@
 
 constexpr int PORT = 12345;
 
-// モデルデータ (立方体)
-std::vector<Vertex> cubeVertices = {
-    {{-1, -1, -1}, {-0.57, -0.57, -0.57}}, {{1, -1, -1}, {0.57, -0.57, -0.57}},
-    {{1, 1, -1}, {0.57, 0.57, -0.57}},     {{-1, 1, -1}, {-0.57, 0.57, -0.57}},
-    {{-1, -1, 1}, {-0.57, -0.57, 0.57}},   {{1, -1, 1}, {0.57, -0.57, 0.57}},
-    {{1, 1, 1}, {0.57, 0.57, 0.57}},       {{-1, 1, 1}, {-0.57, 0.57, 0.57}}};
+// 頂点データ
+struct MyVertex {
+  Vec3 normal; // 法線
+
+  // 属性の線形補間 (ラスタライザーで使う)
+  MyVertex operator+(const MyVertex &r) const { return {normal + r.normal}; }
+  MyVertex operator*(float s) const { return {normal * s}; }
+};
+// [Attribute] モデルデータとして保持する頂点構造
+struct InputVertex {
+  Vec3 position; // 座標
+  Vec3 normal;   // 法線
+};
+
+// 頂点データ (座標 + 法線)
+std::vector<InputVertex> cubeVertices = {
+    // x, y, z      nx, ny, nz
+    {{-1, -1, -1}, {-0.577f, -0.577f, -0.577f}}, // 0: Left-Bottom-Back
+    {{1, -1, -1}, {0.577f, -0.577f, -0.577f}},   // 1: Right-Bottom-Back
+    {{1, 1, -1}, {0.577f, 0.577f, -0.577f}},     // 2: Right-Top-Back
+    {{-1, 1, -1}, {-0.577f, 0.577f, -0.577f}},   // 3: Left-Top-Back
+    {{-1, -1, 1}, {-0.577f, -0.577f, 0.577f}},   // 4: Left-Bottom-Front
+    {{1, -1, 1}, {0.577f, -0.577f, 0.577f}},     // 5: Right-Bottom-Front
+    {{1, 1, 1}, {0.577f, 0.577f, 0.577f}},       // 6: Right-Top-Front
+    {{-1, 1, 1}, {-0.577f, 0.577f, 0.577f}}      // 7: Left-Top-Front
+};
+
+// インデックスデータ (半時計回り)
 std::vector<int> cubeIndices = {
-    // Back (修正: 順序反転)
+    // Back Face
     2, 1, 0, 3, 2, 0,
-    // Front (OK)
+    // Front Face
     4, 5, 6, 4, 6, 7,
-    // Left (OK)
+    // Left Face
     0, 4, 7, 0, 7, 3,
-    // Right (修正: 順序反転)
+    // Right Face
     6, 5, 1, 2, 6, 1,
-    // Top (修正: 順序反転)
-    6, 2, 3, 7, 6, 3,
-    // Bottom (OK)
+    // Top Face
+    3, 7, 6, 2, 3, 6,
+    // Bottom Face
     0, 1, 5, 0, 5, 4};
 
 void handle_client(int client_sock) {
-  AsciiRasterizer rasterizer;
+  AsciiRasterizer<MyVertex> rasterizer; // テンプレート型を指定
 
   float angleX = 0.0f, angleY = 0.0f;
   const char *clear_seq = "\x1b[2J";
@@ -55,41 +77,37 @@ void handle_client(int client_sock) {
 
     // --- 2. シェーダーの定義 (Programmable Shader) ---
 
-    // Vertex Shader: ラムダ式で記述
-    // [キャプチャ]で外部の行列(mvp, model)を取り込む
-    VertexShader vs = [&](const Vertex &in) -> Vertex {
-      Vertex out;
-      // 座標変換: Model -> View -> Proj
-      out.position = mvp.transform(in.position);
+    // Vertex Shader: InputVertexを受け取り、pair<Vec4, MyVertex>を返す
+    auto vs = [&](const InputVertex &in) -> std::pair<Vec4, MyVertex> {
+      // 1. システム座標 (SV_Position)
+      Vec4 pos = mvp.transform(
+          Vec4(in.position.x, in.position.y, in.position.z, 1.0f));
 
-      // ビューポート変換: NDC [-1, 1] -> Screen [80, 24]
-      out.position.x = (out.position.x + 1.0f) * 0.5f * 80.0f;
-      out.position.y = (1.0f - out.position.y) * 0.5f * 24.0f; // Y反転
+      // 2. ユーザー属性 (Varying)
+      MyVertex outVar;
+      outVar.normal = model.transform(in.normal).normalize();
 
-      // 法線変換: 回転だけ適用 (Model行列)
-      out.normal = model.transform(in.normal).normalize();
-      return out;
+      return {pos, outVar};
     };
 
-    // Fragment Shader: ラムダ式で記述
-    Vec3 lightDir = Vec3(0.0f, 0.0f, -2.0f).normalize();
-    const char *palette = " .:-=+*#%@";
+    // 平行光源
+    Vec3 lightDir = Vec3(0.5f, 1.0f, 1.0f).normalize();
 
-    FragmentShader fs = [&](const Vertex &in) -> char {
-      // ライティング計算: 法線とライトの内積 (Lambert)
+    // Fragment Shader: MyVertex (補間済み) を受け取る
+    auto fs = [&](const MyVertex &in) -> char {
       float diff = std::max(0.0f, in.normal.dot(lightDir));
-      int idx = (int)(diff * 9.0f);
+
+      const char *palette = " .:-=+*#%@";
+      int idx = (int)(diff * 9.0f) + 1;
       if (idx > 8)
         idx = 8;
-      if (idx == 0) {
-        idx = 1;
-      }
+
       return palette[idx];
     };
 
     // --- 3. 描画 (Draw Call) ---
     rasterizer.clear();
-    rasterizer.draw(cubeVertices, cubeIndices, vs, fs);
+    rasterizer.draw<InputVertex>(cubeVertices, cubeIndices, vs, fs);
 
     // 送信
     if (send(client_sock, rasterizer.getBuffer(), rasterizer.getBufferSize(),
