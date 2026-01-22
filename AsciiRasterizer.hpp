@@ -8,11 +8,11 @@
 // を持っている必要がある
 template <typename T> class AsciiRasterizer {
 private:
-  static const int WIDTH = 80;
-  static const int HEIGHT = 24;
+  int width, height; // 動的に変更可能にする
 
-  char grid[HEIGHT][WIDTH];
-  float zbuffer[HEIGHT][WIDTH];
+  // 1次元配列として管理 (アクセス: y * width + x)
+  std::vector<char> grid;
+  std::vector<float> zbuffer;
   std::vector<char> send_buffer;
 
 public:
@@ -22,23 +22,48 @@ public:
   // FS: 補間された頂点を受け取り、出力する文字を返す
   using FragmentShader = std::function<char(const T &)>;
 
-  AsciiRasterizer() {
+  AsciiRasterizer(int w = 0, int h = 0) {
+    if (w == 0 || h == 0) {
+      // 取得失敗時のフォールバック
+      w = 80;
+      h = 24;
+    }
+
+    // サイズをセットしてリサイズ
+    resize(w, h);
+  }
+
+  // サイズ変更メソッド (再利用可能にする)
+  void resize(int w, int h) {
+    width = w;
+    height = h;
+
+    // バッファの再確保
+    grid.resize(width * height);
+    zbuffer.resize(width * height);
+
+    // 送信バッファの計算: ヘッダー + (幅 + 改行) * 高さ
     size_t header_len = 3;
-    size_t total_size = header_len + (WIDTH + 1) * HEIGHT;
+    size_t total_size = header_len + (width + 1) * height;
     send_buffer.resize(total_size);
-    // ヘッダーと改行コードの初期化
+
+    // ヘッダー書き込み
     std::memcpy(send_buffer.data(), "\x1b[H", 3);
-    for (int y = 0; y < HEIGHT; ++y) {
-      send_buffer[header_len + y * (WIDTH + 1) + WIDTH] = '\n';
+
+    // 改行コードの位置を事前計算して埋める
+    // [H][....\n][....\n]
+    for (int y = 0; y < height; ++y) {
+      size_t newline_pos = header_len + y * (width + 1) + width;
+      send_buffer[newline_pos] = '\n';
     }
   }
 
-  // 描画クリア
+  // 画面をクリア
   void clear() {
-    std::memset(grid, ' ', sizeof(grid));
-    for (int y = 0; y < HEIGHT; y++)
-      for (int x = 0; x < WIDTH; x++)
-        zbuffer[y][x] = std::numeric_limits<float>::max();
+    std::fill(grid.begin(), grid.end(), ' ');
+    // Zバッファを無限遠でリセット
+    std::fill(zbuffer.begin(), zbuffer.end(),
+              std::numeric_limits<float>::max());
   }
 
   // ドローコール: 頂点、インデックス、シェーダーを受け取って描画
@@ -71,8 +96,8 @@ public:
 
       // B. ビューポート変換 (NDC -> Screen Space)
       // -1.0 ~ +1.0 を 0 ~ WIDTH/HEIGHT に変換
-      pos.x = (pos.x + 1.0f) * 0.5f * (float)WIDTH;
-      pos.y = (1.0f - pos.y) * 0.5f * (float)HEIGHT; // Y反転も含める
+      pos.x = (pos.x + 1.0f) * 0.5f * (float)width;
+      pos.y = (1.0f - pos.y) * 0.5f * (float)height; // Y反転も含める
 
       shadedVertices.push_back({result.first, result.second});
     }
@@ -97,12 +122,20 @@ public:
   const char *getBuffer() const { return send_buffer.data(); }
   size_t getBufferSize() const { return send_buffer.size(); }
 
+  int getWidth() const { return width; }
+  int getHeight() const { return height; }
+
 private:
   void flushToBuffer() {
     size_t header_len = 3;
     char *dst = send_buffer.data() + header_len;
-    for (int y = 0; y < HEIGHT; ++y) {
-      std::memcpy(dst + y * (WIDTH + 1), grid[y], WIDTH);
+    for (int y = 0; y < height; ++y) {
+      // gridの y行目の先頭 -> dstの y行目の先頭
+      // dst側は「改行コード」分だけ1行が長い (width + 1)
+      const char *src_row = grid.data() + y * width;
+      char *dst_row = dst + y * (width + 1);
+
+      std::memcpy(dst_row, src_row, width);
     }
   }
 
@@ -116,8 +149,8 @@ private:
     // スクリーン座標(X,Y)だけでバウンディングボックス計算
     int minX = std::max(0, (int)std::min({p0.x, p1.x, p2.x}));
     int minY = std::max(0, (int)std::min({p0.y, p1.y, p2.y}));
-    int maxX = std::min(WIDTH - 1, (int)std::max({p0.x, p1.x, p2.x}) + 1);
-    int maxY = std::min(HEIGHT - 1, (int)std::max({p0.y, p1.y, p2.y}) + 1);
+    int maxX = std::min(width - 1, (int)std::max({p0.x, p1.x, p2.x}) + 1);
+    int maxY = std::min(height - 1, (int)std::max({p0.y, p1.y, p2.y}) + 1);
 
     Vec2 sp0 = {p0.x, p0.y}, sp1 = {p1.x, p1.y}, sp2 = {p2.x, p2.y};
 
@@ -143,15 +176,15 @@ private:
           // (パースペクティブ補正なしの簡易線形補間)
           float z = p0.z * w0 + p1.z * w1 + p2.z * w2;
 
-          if (z < zbuffer[y][x]) {
-            zbuffer[y][x] = z;
+          if (z < zbuffer[y * width + x]) {
+            zbuffer[y * width + x] = z;
 
             // 【属性補間】
             // ユーザー型 T が何であろうと、ここで補間される
             // T は operator+, operator* を持っている必要がある
             T interpolated = v0 * w0 + v1 * w1 + v2 * w2;
 
-            grid[y][x] = fs(interpolated);
+            grid[y * width + x] = fs(interpolated);
           }
         }
       }

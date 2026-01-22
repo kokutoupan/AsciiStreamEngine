@@ -103,7 +103,42 @@ std::vector<int> cubeIndices = {
 };
 
 void handle_client(int client_sock) {
-  AsciiRasterizer<MyVertex> rasterizer; // テンプレート型を指定
+  int w = 80, h = 24; // デフォルト値
+
+  // 1. タイムアウト設定 (0.1秒)
+  struct timeval tv;
+  tv.tv_sec = 0;
+  tv.tv_usec = 100000; // 100ms
+  setsockopt(client_sock, SOL_SOCKET, SO_RCVTIMEO, (const char *)&tv,
+             sizeof(tv));
+
+  // 2. サイズ受信を試みる
+  uint16_t size_packet[2] = {0, 0};
+  int len = recv(client_sock, size_packet, sizeof(size_packet), 0);
+
+  if (len == sizeof(size_packet)) {
+    // データが正しく来たら採用
+    w = size_packet[0];
+    h = size_packet[1];
+    // バカでかい値や0が来ないようにガード
+    if (w < 1)
+      w = 80;
+    if (h < 1)
+      h = 24;
+    printf("Client requested size: %d x %d\n", w, h);
+  } else {
+    // ncなどが接続した場合 (タイムアウト or データなし)
+    // 何もしない = デフォルト値(80x24)のまま進む
+    printf("Using default size: %d x %d\n", w, h);
+  }
+
+  // 3. タイムアウト解除 (ブロッキングモードに戻す)
+  tv.tv_sec = 0;
+  tv.tv_usec = 0;
+  setsockopt(client_sock, SOL_SOCKET, SO_RCVTIMEO, (const char *)&tv,
+             sizeof(tv));
+
+  AsciiRasterizer<MyVertex> rasterizer(w, h); // テンプレート型を指定
 
   float angleX = 0.0f, angleY = 0.0f;
   const char *clear_seq = "\x1b[2J";
@@ -166,7 +201,7 @@ void handle_client(int client_sock) {
     if (v < 0)
       v += 8;
 
-    char texChar = dev_texture[v][u];
+    char texChar = texture[v][u];
 
     // 3. テクスチャとライティングのブレンド
     // テクスチャが空白なら陰影のみ、文字があればそれを表示
@@ -179,6 +214,12 @@ void handle_client(int client_sock) {
   };
 
   while (true) {
+
+    float currentW = (float)rasterizer.getWidth();
+    float currentH = (float)rasterizer.getHeight();
+
+    float aspect = (currentH > 0) ? (currentW / currentH * 0.5f) : 1.0f;
+
     // Model Matrix: オブジェクト自身の変換 (回転)
     model = Mat4::rotateY(angleY) * Mat4::rotateX(angleX);
 
@@ -186,7 +227,7 @@ void handle_client(int client_sock) {
     Mat4 view = Mat4::translate(0, 0, -4.0f);
 
     // Projection Matrix: カメラのレンズ設定
-    Mat4 proj = Mat4::perspective(1.0f, 80.0f / 24.0f * 0.5f, 0.1f, 100.0f);
+    Mat4 proj = Mat4::perspective(1.0f, aspect, 0.1f, 100.0f);
 
     // MVP行列: シェーダーに渡すための合成行列
     mvp = proj * view * model;

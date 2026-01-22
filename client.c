@@ -4,6 +4,7 @@
 #include <poll.h>
 #include <stdint.h>
 #include <stdio.h>
+#include <sys/ioctl.h>
 #include <sys/poll.h>
 #include <sys/socket.h>
 #include <sys/types.h>
@@ -50,6 +51,19 @@ int main(int argc, char *argv[]) {
     fprintf(stderr, "failed connect: %d;\n", errno);
     return -1;
   }
+
+  struct winsize ws;
+  uint16_t w = 80, h = 24;
+  if (ioctl(STDOUT_FILENO, TIOCGWINSZ, &ws) != -1) {
+    w = ws.ws_col;
+    h = ws.ws_row;
+  }
+
+  // 構造体に詰めて送る
+  // (ネットワークバイトオーダー変換は省略するが、本当はhtonsすべき)
+  // 今回は同一マシンやリトルエンディアン同士と仮定してそのまま送る
+  uint16_t size_packet[2] = {w, h};
+  write(fd, size_packet, sizeof(size_packet));
 
   char buffer[4096];
 
