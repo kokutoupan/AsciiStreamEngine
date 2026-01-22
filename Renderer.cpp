@@ -3,8 +3,6 @@
 
 #include <cmath>
 
-// --- 3D Engine Part (C++) ---
-
 WireframeRenderer::WireframeRenderer() {
   // キューブの頂点定義
   vertices = {{-1, -1, -1}, {1, -1, -1}, {1, 1, -1}, {-1, 1, -1},
@@ -43,13 +41,11 @@ void WireframeRenderer::clear() {
 
 void WireframeRenderer::flushToBuffer() {
   // gridの内容をsend_bufferにコピー
-  // send_bufferはヘッダーと改行を含んでいるので、行ごとにコピーする
   size_t header_len = 3;
   char *dst_base = send_buffer.data() + header_len;
 
   for (int y = 0; y < HEIGHT; ++y) {
     // dst_base + (1行の長さ * y) の位置に、WIDTH分だけコピー
-    // 改行文字は上書きしないように注意
     std::memcpy(dst_base + (y * (WIDTH + 1)), grid[y], WIDTH);
   }
 }
