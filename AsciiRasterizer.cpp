@@ -1,10 +1,9 @@
-
-#include "Renderer.hpp"
+#include "AsciiRasterizer.hpp"
 
 #include <algorithm>
 #include <cmath>
 
-WireframeRenderer::WireframeRenderer() {
+AsciiRasterizer::AsciiRasterizer() {
   // キューブの頂点定義
   vertices = {{-1, -1, -1}, {1, -1, -1}, {1, 1, -1}, {-1, 1, -1},
               {-1, -1, 1},  {1, -1, 1},  {1, 1, 1},  {-1, 1, 1}};
@@ -39,7 +38,7 @@ WireframeRenderer::WireframeRenderer() {
   }
 }
 
-void WireframeRenderer::clear() {
+void AsciiRasterizer::clear() {
   // gridをスペースで埋める
   std::memset(grid, ' ', sizeof(grid));
   // Zバッファを無限遠で初期化
@@ -48,7 +47,7 @@ void WireframeRenderer::clear() {
       zbuffer[y][x] = std::numeric_limits<float>::max();
 }
 
-void WireframeRenderer::flushToBuffer() {
+void AsciiRasterizer::flushToBuffer() {
   // gridの内容をsend_bufferにコピー
   size_t header_len = 3;
   char *dst_base = send_buffer.data() + header_len;
@@ -60,13 +59,13 @@ void WireframeRenderer::flushToBuffer() {
 }
 
 // 重心座標計算用のヘルパー
-float WireframeRenderer::edgeFunction(const Vec3 &a, const Vec3 &b,
+float AsciiRasterizer::edgeFunction(const Vec3 &a, const Vec3 &b,
                                       const Vec3 &c) {
   return (c.x - a.x) * (b.y - a.y) - (c.y - a.y) * (b.x - a.x);
 }
 
 // 三角形のラスタライズ (塗りつぶし + Zバッファ)
-void WireframeRenderer::fillTriangle(const Vec3 &v0, const Vec3 &v1,
+void AsciiRasterizer::fillTriangle(const Vec3 &v0, const Vec3 &v1,
                                      const Vec3 &v2, char shade) {
   // 1. バウンディングボックスを求める (描画範囲を絞るため)
   int minX = std::max(0, (int)std::min({v0.x, v1.x, v2.x}));
@@ -110,7 +109,7 @@ void WireframeRenderer::fillTriangle(const Vec3 &v0, const Vec3 &v1,
   }
 }
 
-void WireframeRenderer::render(float angleX, float angleY, const char **out_ptr,
+void AsciiRasterizer::render(float angleX, float angleY, const char **out_ptr,
                                size_t *out_size) {
   clear();
   float cx = cos(angleX), sx = sin(angleX);

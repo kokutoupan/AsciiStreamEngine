@@ -4,7 +4,7 @@
 
 #include "Math.hpp"
 
-class WireframeRenderer {
+class AsciiRasterizer {
 private:
   // 描画用 (ロジック用)
   static const int WIDTH = 80;
@@ -20,7 +20,7 @@ private:
   std::vector<int> indices;
 
 public:
-  WireframeRenderer();
+  AsciiRasterizer();
 
   // バッファのポインタとサイズをペアで返す (C++17
   // string_viewでも可だが、古いやつでまずそうなのでとりあえずポインタ)

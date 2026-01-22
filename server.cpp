@@ -8,12 +8,12 @@
 #include <sys/socket.h>
 #include <unistd.h>
 
-#include "Renderer.hpp"
+#include "AsciiRasterizer.hpp"
 
 constexpr int PORT = 12345;
 
 void handle_client(int client_sock) {
-  WireframeRenderer renderer;
+  AsciiRasterizer rasterizer;
 
   float angleX = 0.0f, angleY = 0.0f;
   const char *clear_seq = "\x1b[2J";
@@ -23,7 +23,7 @@ void handle_client(int client_sock) {
   while (true) {
     const char *out;
     size_t len;
-    renderer.render(angleX, angleY, &out, &len);
+    rasterizer.render(angleX, angleY, &out, &len);
 
     // send client
     ssize_t sent = send(client_sock, out, len, 0);
