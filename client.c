@@ -1,6 +1,7 @@
 
 #include <errno.h>
 #include <netdb.h>
+#include <netinet/in.h>
 #include <poll.h>
 #include <stdint.h>
 #include <stdio.h>
@@ -60,9 +61,7 @@ int main(int argc, char *argv[]) {
   }
 
   // 構造体に詰めて送る
-  // (ネットワークバイトオーダー変換は省略するが、本当はhtonsすべき)
-  // 今回は同一マシンやリトルエンディアン同士と仮定してそのまま送る
-  uint16_t size_packet[2] = {w, h};
+  uint16_t size_packet[2] = {htons(w), htons(h)};
   write(fd, size_packet, sizeof(size_packet));
 
   char buffer[4096];

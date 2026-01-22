@@ -118,8 +118,8 @@ void handle_client(int client_sock) {
 
   if (len == sizeof(size_packet)) {
     // データが正しく来たら採用
-    w = size_packet[0];
-    h = size_packet[1];
+    w = ntohs(size_packet[0]);
+    h = ntohs(size_packet[1]);
     // バカでかい値や0が来ないようにガード
     if (w < 1)
       w = 80;
@@ -128,7 +128,6 @@ void handle_client(int client_sock) {
     printf("Client requested size: %d x %d\n", w, h);
   } else {
     // ncなどが接続した場合 (タイムアウト or データなし)
-    // 何もしない = デフォルト値(80x24)のまま進む
     printf("Using default size: %d x %d\n", w, h);
   }
 
