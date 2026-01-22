@@ -73,7 +73,6 @@ public:
       // -1.0 ~ +1.0 を 0 ~ WIDTH/HEIGHT に変換
       pos.x = (pos.x + 1.0f) * 0.5f * (float)WIDTH;
       pos.y = (1.0f - pos.y) * 0.5f * (float)HEIGHT; // Y反転も含める
-      // ------------------------------------
 
       shadedVertices.push_back({result.first, result.second});
     }
@@ -120,7 +119,6 @@ private:
     int maxX = std::min(WIDTH - 1, (int)std::max({p0.x, p1.x, p2.x}) + 1);
     int maxY = std::min(HEIGHT - 1, (int)std::max({p0.y, p1.y, p2.y}) + 1);
 
-    // ※ Vec4からVec2(screen xy)へのキャストやアクセサが必要
     Vec2 sp0 = {p0.x, p0.y}, sp1 = {p1.x, p1.y}, sp2 = {p2.x, p2.y};
 
     float area = edgeFunction(sp0, sp1, sp2);

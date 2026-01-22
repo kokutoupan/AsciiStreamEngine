@@ -12,6 +12,27 @@
 
 constexpr int PORT = 12345;
 
+inline char mapIntensityToChar(float intensity) {
+
+  // 70文字の超高解像度パレット (黒背景用: 暗→明)
+  const char *palette = " .'`^\",:;Il!i~+_-?][}"
+                        "{1)(|\\/tfjrxnuvczXYUJCLQ0OZmwqpdbkhao*#MW&8%B@$";
+
+  // 文字数 - 1 (null文字分)
+  // constexpr int len = 69; としてもOK
+  int len = strlen(palette);
+
+  // 0.0~1.0 を インデックスにマッピング
+  int idx = (int)(intensity * (len - 1));
+
+  if (idx < 0)
+    idx = 0;
+  if (idx >= len)
+    idx = len - 1;
+
+  return palette[idx];
+}
+
 // 頂点データ
 struct MyVertex {
   Vec3 normal; // 法線
@@ -62,9 +83,44 @@ void handle_client(int client_sock) {
 
   send(client_sock, clear_seq, strlen(clear_seq), 0);
 
+  // 1. shaderに共有する変数
+  Mat4 mvp;
+  Mat4 model;
+
+  // --- 2. シェーダーの定義 (Programmable Shader) ---
+
+  // Vertex Shader: InputVertexを受け取り、pair<Vec4, MyVertex>を返す
+  auto vs = [&](const InputVertex &in) -> std::pair<Vec4, MyVertex> {
+    // 1. システム座標 (SV_Position)
+    Vec4 pos =
+        mvp.transform(Vec4(in.position.x, in.position.y, in.position.z, 1.0f));
+
+    // 2. ユーザー属性 (Varying)
+    MyVertex outVar;
+    outVar.normal = model.transform(in.normal).normalize();
+
+    return {pos, outVar};
+  };
+
+  // 平行光源
+  Vec3 lightDir = Vec3(0.5f, 1.0f, 1.0f).normalize();
+  float paraL = 1.0;
+
+  float ambient = 0.1;
+
+  // Fragment Shader: MyVertex (補間済み) を受け取る
+  auto fs = [&](const MyVertex &in) -> char {
+    float diff = std::max(0.0f, in.normal.dot(lightDir));
+
+    float col = diff * paraL + ambient;
+    col = std::min(1.0f, col);
+
+    return mapIntensityToChar(col);
+  };
+
   while (true) {
     // Model Matrix: オブジェクト自身の変換 (回転)
-    Mat4 model = Mat4::rotateY(angleY) * Mat4::rotateX(angleX);
+    model = Mat4::rotateY(angleY) * Mat4::rotateX(angleX);
 
     // View Matrix: カメラの位置 (Z = -4.0f)
     Mat4 view = Mat4::translate(0, 0, -4.0f);
@@ -73,39 +129,9 @@ void handle_client(int client_sock) {
     Mat4 proj = Mat4::perspective(1.0f, 80.0f / 24.0f * 0.5f, 0.1f, 100.0f);
 
     // MVP行列: シェーダーに渡すための合成行列
-    Mat4 mvp = proj * view * model;
+    mvp = proj * view * model;
 
-    // --- 2. シェーダーの定義 (Programmable Shader) ---
-
-    // Vertex Shader: InputVertexを受け取り、pair<Vec4, MyVertex>を返す
-    auto vs = [&](const InputVertex &in) -> std::pair<Vec4, MyVertex> {
-      // 1. システム座標 (SV_Position)
-      Vec4 pos = mvp.transform(
-          Vec4(in.position.x, in.position.y, in.position.z, 1.0f));
-
-      // 2. ユーザー属性 (Varying)
-      MyVertex outVar;
-      outVar.normal = model.transform(in.normal).normalize();
-
-      return {pos, outVar};
-    };
-
-    // 平行光源
-    Vec3 lightDir = Vec3(0.5f, 1.0f, 1.0f).normalize();
-
-    // Fragment Shader: MyVertex (補間済み) を受け取る
-    auto fs = [&](const MyVertex &in) -> char {
-      float diff = std::max(0.0f, in.normal.dot(lightDir));
-
-      const char *palette = " .:-=+*#%@";
-      int idx = (int)(diff * 9.0f) + 1;
-      if (idx > 8)
-        idx = 8;
-
-      return palette[idx];
-    };
-
-    // --- 3. 描画 (Draw Call) ---
+    // --- 2. 描画 (Draw Call) ---
     rasterizer.clear();
     rasterizer.draw<InputVertex>(cubeVertices, cubeIndices, vs, fs);
 
