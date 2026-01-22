@@ -19,7 +19,6 @@ inline char mapIntensityToChar(float intensity) {
                         "{1)(|\\/tfjrxnuvczXYUJCLQ0OZmwqpdbkhao*#MW&8%B@$";
 
   // 文字数 - 1 (null文字分)
-  // constexpr int len = 69; としてもOK
   int len = strlen(palette);
 
   // 0.0~1.0 を インデックスにマッピング
@@ -36,44 +35,72 @@ inline char mapIntensityToChar(float intensity) {
 // 頂点データ
 struct MyVertex {
   Vec3 normal; // 法線
+  Vec2 uv;
 
   // 属性の線形補間 (ラスタライザーで使う)
-  MyVertex operator+(const MyVertex &r) const { return {normal + r.normal}; }
-  MyVertex operator*(float s) const { return {normal * s}; }
+  MyVertex operator+(const MyVertex &r) const {
+    return {normal + r.normal, uv + r.uv};
+  }
+  MyVertex operator*(float s) const { return {normal * s, uv * s}; }
 };
 // [Attribute] モデルデータとして保持する頂点構造
 struct InputVertex {
   Vec3 position; // 座標
   Vec3 normal;   // 法線
+  Vec2 uv;
 };
 
-// 頂点データ (座標 + 法線)
+// 頂点データ (座標 + 法線 + UV)
+// 24頂点 (面ごとに独立)
 std::vector<InputVertex> cubeVertices = {
-    // x, y, z      nx, ny, nz
-    {{-1, -1, -1}, {-0.577f, -0.577f, -0.577f}}, // 0: Left-Bottom-Back
-    {{1, -1, -1}, {0.577f, -0.577f, -0.577f}},   // 1: Right-Bottom-Back
-    {{1, 1, -1}, {0.577f, 0.577f, -0.577f}},     // 2: Right-Top-Back
-    {{-1, 1, -1}, {-0.577f, 0.577f, -0.577f}},   // 3: Left-Top-Back
-    {{-1, -1, 1}, {-0.577f, -0.577f, 0.577f}},   // 4: Left-Bottom-Front
-    {{1, -1, 1}, {0.577f, -0.577f, 0.577f}},     // 5: Right-Bottom-Front
-    {{1, 1, 1}, {0.577f, 0.577f, 0.577f}},       // 6: Right-Top-Front
-    {{-1, 1, 1}, {-0.577f, 0.577f, 0.577f}}      // 7: Left-Top-Front
+    // --- Back Face (Z = -1) ---
+    // Pos                      Normal              UV
+    {{1, -1, -1}, {0, 0, -1}, {0.0f, 1.0f}},  // 0: Right Bottom
+    {{-1, -1, -1}, {0, 0, -1}, {1.0f, 1.0f}}, // 1: Left Bottom
+    {{-1, 1, -1}, {0, 0, -1}, {1.0f, 0.0f}},  // 2: Left Top
+    {{1, 1, -1}, {0, 0, -1}, {0.0f, 0.0f}},   // 3: Right Top
+
+    // --- Front Face (Z = +1) ---
+    {{-1, -1, 1}, {0, 0, 1}, {0.0f, 1.0f}}, // 4: Left Bottom
+    {{1, -1, 1}, {0, 0, 1}, {1.0f, 1.0f}},  // 5: Right Bottom
+    {{1, 1, 1}, {0, 0, 1}, {1.0f, 0.0f}},   // 6: Right Top
+    {{-1, 1, 1}, {0, 0, 1}, {0.0f, 0.0f}},  // 7: Left Top
+
+    // --- Left Face (X = -1) ---
+    {{-1, -1, -1}, {-1, 0, 0}, {0.0f, 1.0f}}, // 8:  Back Bottom
+    {{-1, -1, 1}, {-1, 0, 0}, {1.0f, 1.0f}},  // 9:  Front Bottom
+    {{-1, 1, 1}, {-1, 0, 0}, {1.0f, 0.0f}},   // 10: Front Top
+    {{-1, 1, -1}, {-1, 0, 0}, {0.0f, 0.0f}},  // 11: Back Top
+
+    // --- Right Face (X = +1) ---
+    {{1, -1, 1}, {1, 0, 0}, {0.0f, 1.0f}},  // 12: Front Bottom
+    {{1, -1, -1}, {1, 0, 0}, {1.0f, 1.0f}}, // 13: Back Bottom
+    {{1, 1, -1}, {1, 0, 0}, {1.0f, 0.0f}},  // 14: Back Top
+    {{1, 1, 1}, {1, 0, 0}, {0.0f, 0.0f}},   // 15: Front Top
+
+    // --- Top Face (Y = +1) ---
+    {{-1, 1, 1}, {0, 1, 0}, {0.0f, 1.0f}},  // 16: Left Front
+    {{1, 1, 1}, {0, 1, 0}, {1.0f, 1.0f}},   // 17: Right Front
+    {{1, 1, -1}, {0, 1, 0}, {1.0f, 0.0f}},  // 18: Right Back
+    {{-1, 1, -1}, {0, 1, 0}, {0.0f, 0.0f}}, // 19: Left Back
+
+    // --- Bottom Face (Y = -1) ---
+    {{-1, -1, -1}, {0, -1, 0}, {0.0f, 1.0f}}, // 20: Left Back
+    {{1, -1, -1}, {0, -1, 0}, {1.0f, 1.0f}},  // 21: Right Back
+    {{1, -1, 1}, {0, -1, 0}, {1.0f, 0.0f}},   // 22: Right Front
+    {{-1, -1, 1}, {0, -1, 0}, {0.0f, 0.0f}}   // 23: Left Front
 };
 
-// インデックスデータ (半時計回り)
+// インデックスデータ (24頂点対応版)
+// すべて反時計回り (Counter-Clockwise)
 std::vector<int> cubeIndices = {
-    // Back Face
-    2, 1, 0, 3, 2, 0,
-    // Front Face
-    4, 5, 6, 4, 6, 7,
-    // Left Face
-    0, 4, 7, 0, 7, 3,
-    // Right Face
-    6, 5, 1, 2, 6, 1,
-    // Top Face
-    3, 7, 6, 2, 3, 6,
-    // Bottom Face
-    0, 1, 5, 0, 5, 4};
+    0,  1,  2,  0,  2,  3,  // Back
+    4,  5,  6,  4,  6,  7,  // Front
+    8,  9,  10, 8,  10, 11, // Left
+    12, 13, 14, 12, 14, 15, // Right
+    16, 17, 18, 16, 18, 19, // Top
+    20, 21, 22, 20, 22, 23  // Bottom
+};
 
 void handle_client(int client_sock) {
   AsciiRasterizer<MyVertex> rasterizer; // テンプレート型を指定
@@ -98,6 +125,7 @@ void handle_client(int client_sock) {
     // 2. ユーザー属性 (Varying)
     MyVertex outVar;
     outVar.normal = model.transform(in.normal).normalize();
+    outVar.uv = in.uv;
 
     return {pos, outVar};
   };
@@ -107,15 +135,47 @@ void handle_client(int client_sock) {
   float paraL = 1.0;
 
   float ambient = 0.1;
-
+  // 8x8 の "C++" ロゴテクスチャ (ASCIIアート)
+  const char texture[8][9] = {"########", "##    ##", "# C  C #", "#      #",
+                              "# +  + #", "#      #", "##    ##", "########"};
+  // 向き確認用テクスチャ (矢印とか文字とか)
+  const char dev_texture[8][9] = {
+      "########", // 0
+      "##11  ##", // 1
+      "##  2 ##", // 2
+      "##   3##", // 3
+      "##  4 ##", // 4
+      "## 5  ##", // 5
+      "##66  ##", // 6
+      "########"  // 7
+  };
   // Fragment Shader: MyVertex (補間済み) を受け取る
   auto fs = [&](const MyVertex &in) -> char {
     float diff = std::max(0.0f, in.normal.dot(lightDir));
 
     float col = diff * paraL + ambient;
     col = std::min(1.0f, col);
+    // 2. テクスチャサンプリング (UV座標を使う)
+    // UVは 0.0~1.0 なので、配列インデックス 0~7 に変換
+    int u = (int)(in.uv.x * 8.0f) % 8;
+    int v = (int)(in.uv.y * 8.0f) % 8;
 
-    return mapIntensityToChar(col);
+    // 負の値ケア
+    if (u < 0)
+      u += 8;
+    if (v < 0)
+      v += 8;
+
+    char texChar = dev_texture[v][u];
+
+    // 3. テクスチャとライティングのブレンド
+    // テクスチャが空白なら陰影のみ、文字があればそれを表示
+    if (texChar != ' ') {
+      return texChar;
+    } else {
+      // 背景部分は陰影文字
+      return mapIntensityToChar(col);
+    }
   };
 
   while (true) {
