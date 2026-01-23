@@ -18,7 +18,11 @@
 
 constexpr int PORT = 12345;
 
-int send_frame_compressed(int sock, const char *raw_data, size_t raw_len) {
+int send_frame_compressed(int sock, const char *raw_data, size_t raw_len,
+                          int is_raw_send) {
+  if (is_raw_send) {
+    return send(sock, raw_data, raw_len, 0);
+  }
   uLongf comp_len = compressBound(raw_len);
   std::vector<Bytef> comp_buf(comp_len);
 
@@ -131,6 +135,7 @@ std::vector<int> cubeIndices = {
 void handle_client(int client_sock) {
   int w = 80, h = 24; // デフォルト値
 
+  int is_raw_send = 1;
   // 1. タイムアウト設定 (0.1秒)
   struct timeval tv;
   tv.tv_sec = 0;
@@ -152,6 +157,9 @@ void handle_client(int client_sock) {
     if (h < 1)
       h = 24;
     printf("Client requested size: %d x %d\n", w, h);
+
+    // 接続が来る = 多分圧縮ok
+    is_raw_send = 0;
   } else {
     // ncなどが接続した場合 (タイムアウト or データなし)
     printf("Using default size: %d x %d\n", w, h);
@@ -168,8 +176,8 @@ void handle_client(int client_sock) {
   float angleX = 0.0f, angleY = 0.0f;
   const char *clear_seq = "\x1b[2J";
 
-  //send(client_sock, clear_seq, strlen(clear_seq), 0);
-  send_frame_compressed(client_sock,clear_seq, strlen(clear_seq));
+  // send(client_sock, clear_seq, strlen(clear_seq), 0);
+  send_frame_compressed(client_sock, clear_seq, strlen(clear_seq), is_raw_send);
 
   // 1. shaderに共有する変数
   Mat4 mvp;
@@ -267,7 +275,7 @@ void handle_client(int client_sock) {
     //          0) <= 0)
     //   break;
     if (send_frame_compressed(client_sock, rasterizer.getBuffer(),
-                              rasterizer.getBufferSize()) <= 0)
+                              rasterizer.getBufferSize(), is_raw_send) <= 0)
       break;
 
     angleX += 0.05f;
