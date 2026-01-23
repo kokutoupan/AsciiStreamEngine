@@ -11,8 +11,26 @@
 #include <sys/types.h>
 #include <unistd.h>
 
+#include <zconf.h>
+#include <zlib.h>
+
 #define HOST_PORT "12345"
 #define HOST_DOMAIN "localhost"
+
+int recv_exact(int fd, void *buf, size_t len) {
+  size_t recvd = 0;
+  char *p = buf;
+
+  while (recvd < len) {
+    int n = recv(fd, p + recvd, len - recvd, 0);
+    if (n == 0)
+      return 0; // closed
+    if (n < 0)
+      return -1; // error
+    recvd += n;
+  }
+  return recvd;
+}
 
 int main(int argc, char *argv[]) {
 
@@ -64,15 +82,33 @@ int main(int argc, char *argv[]) {
   uint16_t size_packet[2] = {htons(w), htons(h)};
   write(fd, size_packet, sizeof(size_packet));
 
-  char buffer[4096];
+  unsigned char buffer[65536];
+  unsigned char out_buf[65536];
 
   while (1) {
-
-    int len = recv(fd, buffer, 4096, 0);
-    if (len <= 0) {
+    uint32_t net_len;
+    if (recv(fd, &net_len, 4, 0) <= 0) {
       break;
     }
-    write(1, buffer, len);
+
+    int len_oder = ntohl(net_len);
+    printf("%d\n",len_oder);
+
+    int len = recv_exact(fd, buffer, len_oder);
+    printf("%d\n", len);
+
+    uLongf out_len = sizeof(out_buf);
+    int res = uncompress(out_buf, &out_len, buffer, len);
+
+    if (res == Z_OK) {
+      write(1, out_buf, out_len);
+    }
+
+    // int len = recv(fd, buffer, 65536, 0);
+    // if (len <= 0) {
+    //   break;
+    // }
+    // write(1, buffer, len);
   }
 
   close(fd);

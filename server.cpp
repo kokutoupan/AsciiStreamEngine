@@ -1,4 +1,5 @@
 #include <arpa/inet.h>
+#include <cstdint>
 #include <math.h>
 #include <netinet/in.h>
 #include <signal.h>
@@ -6,11 +7,36 @@
 #include <stdlib.h>
 #include <string.h>
 #include <sys/socket.h>
+#include <sys/types.h>
 #include <unistd.h>
+
+#include <vector>
+#include <zconf.h>
+#include <zlib.h>
 
 #include "AsciiRasterizer.hpp"
 
 constexpr int PORT = 12345;
+
+int send_frame_compressed(int sock, const char *raw_data, size_t raw_len) {
+  uLongf comp_len = compressBound(raw_len);
+  std::vector<Bytef> comp_buf(comp_len);
+
+  int res =
+      compress(comp_buf.data(), &comp_len, (const Bytef *)raw_data, raw_len);
+  if (res != Z_OK) {
+    return -1;
+  }
+
+  uint32_t net_len = htonl((uint32_t)comp_len);
+  res = send(sock, &net_len, sizeof(net_len), 0);
+
+  if (res <= 0) {
+    return res;
+  }
+
+  return send(sock, comp_buf.data(), comp_len, 0);
+}
 
 inline char mapIntensityToChar(float intensity) {
 
@@ -142,7 +168,8 @@ void handle_client(int client_sock) {
   float angleX = 0.0f, angleY = 0.0f;
   const char *clear_seq = "\x1b[2J";
 
-  send(client_sock, clear_seq, strlen(clear_seq), 0);
+  //send(client_sock, clear_seq, strlen(clear_seq), 0);
+  send_frame_compressed(client_sock,clear_seq, strlen(clear_seq));
 
   // 1. shaderに共有する変数
   Mat4 mvp;
@@ -236,8 +263,11 @@ void handle_client(int client_sock) {
     rasterizer.draw<InputVertex>(cubeVertices, cubeIndices, vs, fs);
 
     // 送信
-    if (send(client_sock, rasterizer.getBuffer(), rasterizer.getBufferSize(),
-             0) <= 0)
+    // if (send(client_sock, rasterizer.getBuffer(), rasterizer.getBufferSize(),
+    //          0) <= 0)
+    //   break;
+    if (send_frame_compressed(client_sock, rasterizer.getBuffer(),
+                              rasterizer.getBufferSize()) <= 0)
       break;
 
     angleX += 0.05f;
