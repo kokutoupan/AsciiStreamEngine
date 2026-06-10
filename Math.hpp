@@ -128,4 +128,20 @@ struct Mat4 {
     r.m[3][2] = -1.0f;
     return r;
   }
+  static Mat4 orthographic(float left, float right, float bottom, float top,
+                           float n, float f) {
+    Mat4 r;
+    std::memset(r.m, 0, sizeof(r.m));
+
+    r.m[0][0] = 2.0f / (right - left);
+    r.m[1][1] = 2.0f / (top - bottom);
+    r.m[2][2] = 2.0f / (n - f);
+
+    r.m[0][3] = -(right + left) / (right - left);
+    r.m[1][3] = -(top + bottom) / (top - bottom);
+    r.m[2][3] = (f + n) / (n - f);
+    r.m[3][3] = 1.0f;
+
+    return r;
+  }
 };
