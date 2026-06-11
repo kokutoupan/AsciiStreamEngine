@@ -167,10 +167,37 @@ public:
     }
   };
 
+  class ComputePass {
+  private:
+    std::function<void(int x, int y)> m_computeShader;
+
+  public:
+    ComputePass() = default;
+
+    ComputePass &set_shader(std::function<void(int x, int y)> cs) {
+      m_computeShader = cs;
+      return *this;
+    }
+
+    void execute(int width, int height) {
+      if (!m_computeShader)
+        return;
+
+      // TODO: 後に#pragma omp parallel for collapse(2)
+      for (int y = 0; y < height; ++y) {
+        for (int x = 0; x < width; ++x) {
+          m_computeShader(x, y);
+        }
+      }
+    }
+  };
+
   // --- パス生成ファクトリ関数 ---
   template <typename InputVertex, typename Varying, typename DepthT = float>
   RasterizePass<InputVertex, Varying, DepthT>
   create_rasterize_pass(Texture2D<DepthT> &depthBuffer) {
     return RasterizePass<InputVertex, Varying, DepthT>(depthBuffer);
   }
+
+  ComputePass create_compute_pass() { return ComputePass(); }
 };
