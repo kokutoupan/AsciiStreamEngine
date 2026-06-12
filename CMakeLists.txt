@@ -1,7 +1,8 @@
 cmake_minimum_required(VERSION 3.10)
 project(Ascii3DStream)
 
-set(CMAKE_CXX_STANDARD 17)
+set(CMAKE_EXPORT_COMPILE_COMMANDS ON)
+set(CMAKE_CXX_STANDARD 23)
 set(CMAKE_CXX_STANDARD_REQUIRED True)
 
 find_package(ZLIB  REQUIRED)
@@ -18,3 +19,7 @@ target_link_libraries(server ${LIBS} ZLIB::ZLIB)
 # クライアント側
 add_executable(client client.c)
 target_link_libraries(client ${LIBS} ZLIB::ZLIB)
+
+# テスト
+add_executable(test renderer_sample.cpp)
+target_link_libraries(test ${LIBS})

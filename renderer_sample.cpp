@@ -1,53 +1,16 @@
 #include <algorithm>
-#include <arpa/inet.h>
 #include <cmath>
-#include <cstdint>
 #include <cstdlib>
 #include <cstring>
 #include <functional>
+#include <iostream>
 #include <limits>
-#include <math.h>
-#include <netinet/in.h>
-#include <signal.h>
-#include <stdio.h>
-#include <stdlib.h>
-#include <string.h>
-#include <sys/socket.h>
-#include <sys/types.h>
 #include <unistd.h>
 #include <vector>
-#include <zconf.h>
-#include <zlib.h>
 
 #include "GraphicsDevice.hpp"
 #include "Math.hpp"
 #include "Texture2D.hpp"
-
-constexpr int PORT = 12345;
-
-int send_frame_compressed(int sock, const char *raw_data, size_t raw_len,
-                          int is_raw_send) {
-  if (is_raw_send) {
-    return send(sock, raw_data, raw_len, 0);
-  }
-  uLongf comp_len = compressBound(raw_len);
-  std::vector<Bytef> comp_buf(comp_len);
-
-  int res =
-      compress(comp_buf.data(), &comp_len, (const Bytef *)raw_data, raw_len);
-  if (res != Z_OK) {
-    return -1;
-  }
-
-  uint32_t net_len = htonl((uint32_t)comp_len);
-  res = send(sock, &net_len, sizeof(net_len), 0);
-
-  if (res <= 0) {
-    return res;
-  }
-
-  return send(sock, comp_buf.data(), comp_len, 0);
-}
 
 inline char mapIntensityToChar(float intensity) {
   const char *palette = " .'`^\",:;Il!i~+_-?][}"
@@ -183,45 +146,8 @@ auto deferredLightingCS =
       }
     };
 
-void handle_client(int client_sock) {
-  int w = 80, h = 24; // デフォルト値
-
-  int is_raw_send = 1;
-  // 1. タイムアウト設定 (0.1秒)
-  struct timeval tv;
-  tv.tv_sec = 0;
-  tv.tv_usec = 100000; // 100ms
-  setsockopt(client_sock, SOL_SOCKET, SO_RCVTIMEO, (const char *)&tv,
-             sizeof(tv));
-
-  // 2. サイズ受信を試みる
-  uint16_t size_packet[2] = {0, 0};
-  int len = recv(client_sock, size_packet, sizeof(size_packet), 0);
-
-  if (len == sizeof(size_packet)) {
-    // データが正しく来たら採用
-    w = ntohs(size_packet[0]);
-    h = ntohs(size_packet[1]);
-    // バカでかい値や0が来ないようにガード
-    if (w < 1)
-      w = 80;
-    if (h < 1)
-      h = 24;
-    printf("Client requested size: %d x %d\n", w, h);
-
-    // 接続が来る = 多分圧縮ok
-    is_raw_send = 0;
-  } else {
-    // ncなどが接続した場合 (タイムアウト or データなし)
-    printf("Using default size: %d x %d\n", w, h);
-  }
-
-  // 3. タイムアウト解除 (ブロッキングモードに戻す)
-  tv.tv_sec = 0;
-  tv.tv_usec = 0;
-  setsockopt(client_sock, SOL_SOCKET, SO_RCVTIMEO, (const char *)&tv,
-             sizeof(tv));
-
+int main() {
+  int w = 80, h = 24;
   auto device = GraphicsDevice();
 
   // 出力
@@ -247,19 +173,12 @@ void handle_client(int client_sock) {
                                       -boxSize, boxSize, 0.1f, 10.0f);
   Mat4 lightSpaceMatrix = lightProj * lightView;
 
-  std::vector<char> outputStream((w + 1) * h + 1 + 4, '\0');
-  std::copy(clear_seq, clear_seq + 4, outputStream.begin());
-  for (int y = 0; y < h; ++y) {
-    outputStream[4 + (w + 1) * y + w] = '\n';
-  }
-  // 最末尾をヌル文字に
-  outputStream[outputStream.size() - 1] = '\0';
+  std::vector<char> outputStream((w + 1) * h + 1, '\0');
 
   Mat4 currentModel;
   Mat4 currentMVP;
 
   while (true) {
-
     colorBuffer.clear(' ');
     cameraDepth.clear(std::numeric_limits<float>::max());
     shadowDepth.clear(std::numeric_limits<float>::max());
@@ -327,90 +246,24 @@ void handle_client(int client_sock) {
                        std::cref(albedoBuffer), std::cref(normalBuffer),
                        std::cref(worldPosBuffer), std::cref(shadowDepth),
                        lightSpaceMatrix, lightDir, w, h));
+
+    // ==========================================
+    // PRESENT: 画面出力
+    // ==========================================
+    std::cout << clear_seq;
     size_t streamIdx = 0;
     for (int y = 0; y < h; ++y) {
       for (int x = 0; x < w; ++x) {
         outputStream[streamIdx++] = colorBuffer.at(x, y);
       }
-      ++streamIdx;
+      outputStream[streamIdx++] = '\n';
     }
     outputStream[streamIdx] = '\0';
-
-    // 送信
-    // if (send(client_sock, rasterizer.getBuffer(), rasterizer.getBufferSize(),
-    //          0) <= 0)
-    //   break;
-    // 出力
-
-    if (send_frame_compressed(client_sock, outputStream.data(),
-                              outputStream.size(), is_raw_send) <= 0)
-      break;
+    std::cout << outputStream.data() << std::flush;
 
     angleX += 0.05f;
     angleY += 0.03f;
     usleep(50000);
   }
-  close(client_sock);
-}
-
-int main() {
-  signal(SIGPIPE, SIG_IGN);
-  int server_sock, client_sock;
-  struct sockaddr_in server_addr, client_addr;
-  socklen_t addr_len = sizeof(client_addr);
-
-  // 1. ソケット作成
-  if ((server_sock = socket(AF_INET, SOCK_STREAM, 0)) < 0) {
-    perror("socket failed");
-    return -1;
-  }
-
-  // ソケットオプション設定 (TIME_WAIT状態でもポートを即再利用できるようにする)
-  int opt = 1;
-  setsockopt(server_sock, SOL_SOCKET, SO_REUSEADDR, &opt, sizeof(opt));
-
-  // 2. アドレス設定
-  server_addr.sin_family = AF_INET;
-  server_addr.sin_addr.s_addr = INADDR_ANY;
-  server_addr.sin_port = htons(PORT);
-
-  // 3. Bind
-  if (bind(server_sock, (struct sockaddr *)&server_addr, sizeof(server_addr)) <
-      0) {
-    perror("bind failed");
-    return -1;
-  }
-
-  // 4. Listen
-  if (listen(server_sock, 3) < 0) {
-    perror("listen failed");
-    return -1;
-  }
-
-  printf("Server listening on port %d...\n", PORT);
-  printf("Try running: nc 127.0.0.1 or client -p  %d\n", PORT);
-
-  // 5. Accept Loop
-  while (1) {
-    if ((client_sock = accept(server_sock, (struct sockaddr *)&client_addr,
-                              &addr_len)) < 0) {
-      perror("accept failed");
-      continue;
-    }
-
-    printf("New connection from %s\n", inet_ntoa(client_addr.sin_addr));
-
-    // 子プロセスを作って処理を任せる
-    if (fork() == 0) {
-      close(server_sock); // 子プロセスにはリスニングソケットは不要
-      handle_client(client_sock);
-      fprintf(stderr, "Connection closed.\n");
-      exit(0);
-    } else {
-      // 親は，子供を閉じる
-      close(client_sock);
-    }
-  }
-
   return 0;
 }
