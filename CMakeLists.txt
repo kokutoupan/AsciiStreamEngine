@@ -12,13 +12,13 @@ if(UNIX)
   set(LIBS m)
 endif()
 
-# # サーバー側
-# add_executable(server server.cpp)
-# target_link_libraries(server ${LIBS} ZLIB::ZLIB)
-#
-# # クライアント側
-# add_executable(client client.c)
-# target_link_libraries(client ${LIBS} ZLIB::ZLIB)
+# サーバー側
+add_executable(server server.cpp)
+target_link_libraries(server ${LIBS} ZLIB::ZLIB)
+
+# クライアント側
+add_executable(client client.c)
+target_link_libraries(client ${LIBS} ZLIB::ZLIB)
 
 # テスト
 add_executable(test renderer_sample.cpp)
