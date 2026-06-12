@@ -196,15 +196,13 @@ int main() {
         device.create_rasterize_pass<InputVertex, Vec3, float>(shadowDepth);
 
     currentModel.identity();
-    shadowPass.set_vertex_shader(
-        std::bind_back(shadowVS, currentModel, lightSpaceMatrix));
-    shadowPass.draw(planeVertices, planeIndices);
+    shadowPass.draw(planeVertices, planeIndices,
+                    std::bind_back(shadowVS, currentModel, lightSpaceMatrix));
 
     currentModel = Mat4::translate(0.0f, 0.3f, 0.0f) * Mat4::rotateY(angleY) *
                    Mat4::rotateX(angleX);
-    shadowPass.set_vertex_shader(
-        std::bind_back(shadowVS, currentModel, lightSpaceMatrix));
-    shadowPass.draw(cubeVertices, cubeIndices);
+    shadowPass.draw(cubeVertices, cubeIndices,
+                    std::bind_back(shadowVS, currentModel, lightSpaceMatrix));
 
     // ==========================================
     // PASS 2: ジオメトリパス (Gバッファへの書き込み)
@@ -214,42 +212,40 @@ int main() {
             cameraDepth);
 
     // 2-1. 床
-    geometryPass.set_on_pixel_fragment([&](int x, int y, const MyVarying &in) {
-      albedoBuffer.at(x, y) = 'F';
-      normalBuffer.at(x, y) = in.normal;
-      worldPosBuffer.at(x, y) = in.worldPos;
-    });
+
     currentModel.identity();
     currentMVP = proj * view * currentModel;
-    geometryPass.set_vertex_shader(
-        std::bind_back(geometryVS, currentModel, currentMVP));
-    geometryPass.draw(planeVertices, planeIndices);
+    geometryPass.draw(planeVertices, planeIndices,
+                      std::bind_back(geometryVS, currentModel, currentMVP),
+                      [&](int x, int y, const MyVarying &in) {
+                        albedoBuffer.at(x, y) = 'F';
+                        normalBuffer.at(x, y) = in.normal;
+                        worldPosBuffer.at(x, y) = in.worldPos;
+                      });
 
     // 2-2. キューブ
-    geometryPass.set_on_pixel_fragment([&](int x, int y, const MyVarying &in) {
-      albedoBuffer.at(x, y) = 'C';
-      normalBuffer.at(x, y) = in.normal;
-      worldPosBuffer.at(x, y) = in.worldPos;
-    });
     currentModel = Mat4::translate(0.0f, 0.3f, 0.0f) * Mat4::rotateY(angleY) *
                    Mat4::rotateX(angleX);
     currentMVP = proj * view * currentModel;
-    geometryPass.set_vertex_shader(
-        std::bind_back(geometryVS, currentModel, currentMVP));
-    geometryPass.draw(cubeVertices, cubeIndices);
+    geometryPass.draw(cubeVertices, cubeIndices,
+                      std::bind_back(geometryVS, currentModel, currentMVP),
+                      [&](int x, int y, const MyVarying &in) {
+                        albedoBuffer.at(x, y) = 'C';
+                        normalBuffer.at(x, y) = in.normal;
+                        worldPosBuffer.at(x, y) = in.worldPos;
+                      });
 
     // ==========================================
     // PASS 3: ライティングパス
     // ==========================================
     auto lightingPass = device.create_compute_pass();
 
-    // 後ろの引数をすべて部分適用
-    lightingPass.set_shader(std::bind_back(
-        deferredLightingCS, std::ref(colorBuffer), std::ref(albedoBuffer),
-        std::ref(normalBuffer), std::ref(worldPosBuffer), std::ref(shadowDepth),
-        lightSpaceMatrix, lightDir, w, h));
-
-    lightingPass.execute(w, h);
+    lightingPass.execute(
+        w, h,
+        std::bind_back(deferredLightingCS, std::ref(colorBuffer),
+                       std::cref(albedoBuffer), std::cref(normalBuffer),
+                       std::cref(worldPosBuffer), std::cref(shadowDepth),
+                       lightSpaceMatrix, lightDir, w, h));
 
     // ==========================================
     // PRESENT: 画面出力
