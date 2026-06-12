@@ -19,7 +19,7 @@
 
 int recv_exact(int fd, void *buf, size_t len) {
   size_t recvd = 0;
-  char *p = buf;
+  char *p = (char *)buf;
 
   while (recvd < len) {
     int n = recv(fd, p + recvd, len - recvd, 0);
@@ -92,10 +92,10 @@ int main(int argc, char *argv[]) {
     }
 
     int len_oder = ntohl(net_len);
-    printf("%d\n",len_oder);
+    // printf("%d\n", len_oder);
 
     int len = recv_exact(fd, buffer, len_oder);
-    printf("%d\n", len);
+    // printf("%d\n", len);
 
     uLongf out_len = sizeof(out_buf);
     int res = uncompress(out_buf, &out_len, buffer, len);

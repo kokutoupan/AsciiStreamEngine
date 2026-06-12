@@ -1,7 +1,6 @@
-# ascii-network-renderer
+# AsciiStreamEngine
 
 サーバーサイドでasciiでレンダリングするシステムです。ncと独自クライントで接続できます。
-
 
 ## Build
 
