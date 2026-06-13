@@ -2,24 +2,31 @@
 
 #include <algorithm>
 #include <cmath>
-#include <cstdlib>
-#include <cstring>
 #include <functional>
 #include <limits>
 #include <math.h>
 #include <memory>
-#include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
 #include <unistd.h>
 #include <vector>
-#include <zconf.h>
-#include <zlib.h>
 
 #include "ConnectionContext.hpp"
 #include "GraphicsDevice.hpp"
 #include "Math.hpp"
 #include "Texture2D.hpp"
+
+inline char mapIntensityToChar(float intensity) {
+  const char *palette = " .'`^\",:;Il!i~+_-?][}{1)(|\\/"
+                        "tfjrxnuvczXYUJCLQ0OZmwqpdbkhao*#MW&8%B@$";
+  int len = strlen(palette);
+  int idx = (int)(intensity * (len - 1));
+  if (idx < 0)
+    idx = 0;
+  if (idx >= len)
+    idx = len - 1;
+  return palette[idx];
+}
 
 class CubeApp : public ConnectionContext {
 private:
@@ -29,7 +36,6 @@ private:
   float aspect = 1.0f;
 
   GraphicsDevice device;
-  std::unique_ptr<Texture2D<char>> colorBuffer;
   std::unique_ptr<Texture2D<float>> cameraDepth;
   std::unique_ptr<Texture2D<float>> shadowDepth;
   std::unique_ptr<Texture2D<char>> albedoBuffer;
@@ -61,18 +67,6 @@ private:
   std::vector<int> cubeIndices;
   std::vector<InputVertex> planeVertices;
   std::vector<int> planeIndices;
-
-  char mapIntensityToChar(float intensity) {
-    const char *palette = " .'`^\",:;Il!i~+_-?][}{1)(|\\/"
-                          "tfjrxnuvczXYUJCLQ0OZmwqpdbkhao*#MW&8%B@$";
-    int len = strlen(palette);
-    int idx = (int)(intensity * (len - 1));
-    if (idx < 0)
-      idx = 0;
-    if (idx >= len)
-      idx = len - 1;
-    return palette[idx];
-  }
 
 public:
   CubeApp() {
@@ -138,7 +132,6 @@ public:
     lightSpaceMatrix = lightProj * lightView;
 
     // 各種バッファの生成/リサイズ
-    colorBuffer = std::make_unique<Texture2D<char>>(w, h, ' ');
     cameraDepth = std::make_unique<Texture2D<float>>(
         w, h, std::numeric_limits<float>::max());
     shadowDepth = std::make_unique<Texture2D<float>>(
@@ -173,9 +166,9 @@ public:
     }
   }
 
-  void render(std::vector<char> &outputStream) override {
+  void render(Texture2D<char> &outputTexture) override {
     // バッファクリア
-    colorBuffer->clear(' ');
+    outputTexture.clear(' ');
     cameraDepth->clear(std::numeric_limits<float>::max());
     shadowDepth->clear(std::numeric_limits<float>::max());
     albedoBuffer->clear(' ');
@@ -205,35 +198,46 @@ public:
               outVar};
     };
 
-    auto deferredLightingCS = [&](int x, int y) {
-      char mtl = albedoBuffer->at(x, y);
+    auto deferredLightingCS = [](int x, int y, Texture2D<char> &colorBuf,
+                                 const Texture2D<char> &albedoBuf,
+                                 const Texture2D<Vec3> &normalBuf,
+                                 const Texture2D<Vec3> &worldPosBuf,
+                                 const Texture2D<float> &shadowDepth,
+                                 const Mat4 &lightSpace, const Vec3 &lightDir,
+                                 int w, int h) {
+      char mtl = albedoBuf.at(x, y);
       if (mtl == ' ')
         return;
 
-      Vec3 worldPos = worldPosBuffer->at(x, y);
-      Vec3 normal = normalBuffer->at(x, y);
+      Vec3 worldPos = worldPosBuf.at(x, y);
+      Vec3 normal = normalBuf.at(x, y);
 
-      Vec4 posInLightSpace = lightSpaceMatrix.transform(
-          Vec4(worldPos.x, worldPos.y, worldPos.z, 1.0f));
+      // 1. シャドウ判定
+      Vec4 posInLightSpace =
+          lightSpace.transform(Vec4(worldPos.x, worldPos.y, worldPos.z, 1.0f));
       float shadowX = (posInLightSpace.x + 1.0f) * 0.5f * (float)w;
       float shadowY = (1.0f - posInLightSpace.y) * 0.5f * (float)h;
 
       float shadowFactor = 1.0f;
       if (shadowX >= 0 && shadowX < w && shadowY >= 0 && shadowY < h) {
-        float closestDepth = shadowDepth->at((int)shadowX, (int)shadowY);
-        if (posInLightSpace.z > closestDepth + 0.002f) {
+        float closestDepth = shadowDepth.at((int)shadowX, (int)shadowY);
+        float currentDepth = posInLightSpace.z;
+        if (currentDepth > closestDepth + 0.002f) {
           shadowFactor = 0.2f;
         }
       }
 
+      // 2. ライティング
       float diff = std::max(0.0f, normal.dot(lightDir));
-      float col = std::min(1.0f, (diff * shadowFactor) + 0.1f);
+      float col = (diff * shadowFactor) + 0.1f;
+      col = std::min(1.0f, col);
 
-      if (mtl == 'C')
-        colorBuffer->at(x, y) = mapIntensityToChar(col);
-      else if (mtl == 'F')
-        colorBuffer->at(x, y) =
+      if (mtl == 'C') {
+        colorBuf.at(x, y) = mapIntensityToChar(col);
+      } else if (mtl == 'F') {
+        colorBuf.at(x, y) =
             (shadowFactor < 1.0f) ? ':' : mapIntensityToChar(col * 0.5f);
+      }
     };
 
     // --- PASS 1: シャドウパス ---
@@ -276,15 +280,11 @@ public:
 
     // --- PASS 3: ライティングパス ---
     auto lightingPass = device.create_compute_pass();
-    lightingPass.execute(w, h, deferredLightingCS);
-
-    // ストリームバッファにフラッシュ (\x1b[2J シーケンスの後ろに敷き詰める)
-    size_t streamIdx = 4;
-    for (int y = 0; y < h; ++y) {
-      for (int x = 0; x < w; ++x) {
-        outputStream[streamIdx++] = colorBuffer->at(x, y);
-      }
-      ++streamIdx; // \n スキップ
-    }
+    lightingPass.execute(
+        w, h,
+        std::bind_back(deferredLightingCS, std::ref(outputTexture),
+                       std::cref(*albedoBuffer), std::cref(*normalBuffer),
+                       std::cref(*worldPosBuffer), std::cref(*shadowDepth),
+                       std::cref(lightSpaceMatrix), lightDir, w, h));
   }
 };

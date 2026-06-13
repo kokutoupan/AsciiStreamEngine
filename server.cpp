@@ -20,6 +20,7 @@
 
 #include "ConnectionContext.hpp"
 #include "CubeApp.hpp"
+#include "Texture2D.hpp"
 
 constexpr int PORT = 12345;
 
@@ -59,6 +60,7 @@ struct ClientSession {
   bool size_initialized = false;
   InputDevice input;
   std::unique_ptr<ConnectionContext> app;
+  std::unique_ptr<Texture2D<char>> color_buffer;
   std::vector<char> output_buffer;
 };
 
@@ -151,6 +153,8 @@ int main() {
           session.app->init(session.width, session.height);
           session.size_initialized = true;
 
+          session.color_buffer = std::make_unique<Texture2D<char>>(
+              session.width, session.height, ' ');
           // 送信ストリームバッファの初期化設定 (\x1b[2J + 画面バッファサイズ)
           session.output_buffer.resize(
               4 + (session.width + 1) * session.height + 1, '\0');
@@ -186,7 +190,21 @@ int main() {
         continue;
 
       session.app->update(session.input);         // ロジック更新
-      session.app->render(session.output_buffer); // レンダリング
+      session.app->render(*session.color_buffer); // レンダリング
+      //
+      size_t streamIdx = 4;   // \x1b[2J の後ろから
+      int w = session.width;  //
+      int h = session.height; //
+
+      for (int y = 0; y < h; ++y) {
+        // Texture2D の1行分のポインタを取得
+        const char *src_row = session.color_buffer->getData() + (y * w);
+        char *dst_row = session.output_buffer.data() + streamIdx;
+
+        std::memcpy(dst_row, src_row, w);
+
+        streamIdx += (w + 1); // 幅 + '\n' 分をスキップ
+      }
 
       // 送信
       if (send_frame_compressed(fd, session.output_buffer.data(),
