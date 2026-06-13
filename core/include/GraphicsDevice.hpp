@@ -4,7 +4,6 @@
 #include "Texture2D.hpp"
 #include <algorithm>
 #include <concepts>
-#include <functional>
 #include <limits>
 #include <utility>
 #include <vector>
@@ -185,8 +184,9 @@ public:
 
       // 深度描画用に座標と1/Wのみを保持する内部構造体
       struct ShadedVertex {
-        Vec4 screenPos; // X, Y はスクリーン空間座標、Z は深度テスト用、W は 1/W 保持用
-        float invW;     // 1 / W
+        Vec4 screenPos; // X, Y はスクリーン空間座標、Z は深度テスト用、W は 1/W
+                        // 保持用
+        float invW; // 1 / W
       };
 
       std::vector<ShadedVertex> shadedVertices;

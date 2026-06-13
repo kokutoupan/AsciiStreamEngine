@@ -12,7 +12,7 @@ if(UNIX)
   set(LIBS m)
 endif()
 
-include_directories(core/include)
+include_directories(core/include shaders)
 
 add_subdirectory(core)
 add_subdirectory(client)

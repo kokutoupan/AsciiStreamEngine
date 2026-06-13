@@ -8,6 +8,7 @@
 #include <vector>
 
 #include "ConnectionContext.hpp"
+#include "DefaultShaders.hpp"
 #include "GameWorld.hpp"
 #include "GraphicsDevice.hpp"
 #include "Math.hpp"
@@ -48,18 +49,6 @@ public:
 // 2. 各クライアントごとの個別セッションクラス (WASDキーで自分だけのカメラ移動)
 // =============================================================================
 
-inline char mapIntensityToChar(float intensity) {
-  const char *palette = " .'`^\",:;Il!i~+_-?][}{1)(|\\/"
-                        "tfjrxnuvczXYUJCLQ0OZmwqpdbkhao*#MW&8%B@$";
-  int len = strlen(palette);
-  int idx = (int)(intensity * (len - 1));
-  if (idx < 0)
-    idx = 0;
-  if (idx >= len)
-    idx = len - 1;
-  return palette[idx];
-}
-
 class MyPlayerSession : public ConnectionContext<MyGameWorld> {
 private:
   int m_clientId = -1;
@@ -79,26 +68,9 @@ private:
   Mat4 lightSpaceMatrix;
   Vec3 lightDir;
 
-  struct InputVertex {
-    Vec3 position;
-    Vec3 normal;
-    Vec2 uv;
-  };
-  struct MyVarying {
-    Vec3 normal;
-    Vec2 uv;
-    Vec3 worldPos;
-    MyVarying operator+(const MyVarying &r) const {
-      return {normal + r.normal, uv + r.uv, worldPos + r.worldPos};
-    }
-    MyVarying operator*(float s) const {
-      return {normal * s, uv * s, worldPos * s};
-    }
-  };
-
-  std::vector<InputVertex> cubeVertices;
+  std::vector<Shaders::DefaultVertex> cubeVertices;
   std::vector<int> cubeIndices;
-  std::vector<InputVertex> planeVertices;
+  std::vector<Shaders::DefaultVertex> planeVertices;
   std::vector<int> planeIndices;
 
 public:
@@ -204,107 +176,56 @@ public:
     Mat4 view = Mat4::translate(m_cameraPos.x, m_cameraPos.y, m_cameraPos.z);
     Mat4 proj = Mat4::perspective(1.0f, aspect, 0.1f, 100.0f);
 
-    auto shadowVS = [](const InputVertex &in, const Mat4 &model,
-                       const Mat4 &lightSpace) -> std::pair<Vec4, Vec3> {
-      Vec3 worldPos = model.transform(in.position);
-      return {
-          lightSpace.transform(Vec4(worldPos.x, worldPos.y, worldPos.z, 1.0f)),
-          worldPos};
-    };
-
-    auto geometryVS = [](const InputVertex &in, const Mat4 &model,
-                         const Mat4 &mvp) -> std::pair<Vec4, MyVarying> {
-      MyVarying outVar;
-      outVar.normal = model.transform(in.normal).normalize();
-      outVar.uv = in.uv;
-      outVar.worldPos = model.transform(in.position);
-      return {mvp.transform(
-                  Vec4(in.position.x, in.position.y, in.position.z, 1.0f)),
-              outVar};
-    };
-
-    auto deferredLightingCS = [](int x, int y, Texture2D<char> &colorBuf,
-                                 const Texture2D<char> &albedoBuf,
-                                 const Texture2D<Vec3> &normalBuf,
-                                 const Texture2D<Vec3> &worldPosBuf,
-                                 const Texture2D<float> &shadowDepth,
-                                 const Mat4 &lightSpace, const Vec3 &lightDir,
-                                 int w, int h) {
-      char mtl = albedoBuf.at(x, y);
-      if (mtl == ' ')
-        return;
-
-      Vec3 worldPos = worldPosBuf.at(x, y);
-      Vec3 normal = normalBuf.at(x, y);
-
-      Vec4 posInLightSpace =
-          lightSpace.transform(Vec4(worldPos.x, worldPos.y, worldPos.z, 1.0f));
-      float shadowX = (posInLightSpace.x + 1.0f) * 0.5f * (float)w;
-      float shadowY = (1.0f - posInLightSpace.y) * 0.5f * (float)h;
-
-      float shadowFactor = 1.0f;
-      if (shadowX >= 0 && shadowX < w && shadowY >= 0 && shadowY < h) {
-        float closestDepth = shadowDepth.at((int)shadowX, (int)shadowY);
-        if (posInLightSpace.z > closestDepth + 0.002f)
-          shadowFactor = 0.2f;
-      }
-
-      float diff = std::max(0.0f, normal.dot(lightDir));
-      float col = std::min(1.0f, (diff * shadowFactor) + 0.1f);
-
-      if (mtl == 'C')
-        colorBuf.at(x, y) = mapIntensityToChar(col);
-      else if (mtl == 'F')
-        colorBuf.at(x, y) =
-            (shadowFactor < 1.0f) ? ':' : mapIntensityToChar(col * 0.5f);
-    };
-
     // --- PASS 1: シャドウパス ---
     auto shadowPass =
-        device.create_rasterize_pass<InputVertex, Vec3, float>(*shadowDepth);
+        device.create_rasterize_pass<Shaders::DefaultVertex, Vec3, float>(
+            *shadowDepth);
     Mat4 currentModel;
     currentModel.identity();
-    shadowPass.draw(planeVertices, planeIndices,
-                    std::bind_back(shadowVS, currentModel, lightSpaceMatrix));
+    shadowPass.draw(
+        planeVertices, planeIndices,
+        std::bind_back(Shaders::shadowVS, currentModel, lightSpaceMatrix));
 
     // 【共有空間との同期】世界の回転角 (world.angleX / world.angleY)
     // をモデル行列にバインドする！
     currentModel = Mat4::translate(0.0f, 0.3f, 0.0f) *
                    Mat4::rotateY(world.angleY) * Mat4::rotateX(world.angleX);
-    shadowPass.draw(cubeVertices, cubeIndices,
-                    std::bind_back(shadowVS, currentModel, lightSpaceMatrix));
+    shadowPass.draw(
+        cubeVertices, cubeIndices,
+        std::bind_back(Shaders::shadowVS, currentModel, lightSpaceMatrix));
 
     // --- PASS 2: ジオメトリパス ---
-    auto geometryPass =
-        device.create_rasterize_pass<InputVertex, MyVarying, float>(
-            *cameraDepth);
+    auto geometryPass = device.create_rasterize_pass<
+        Shaders::DefaultVertex, Shaders::DefaultVarying, float>(*cameraDepth);
     currentModel.identity();
     Mat4 currentMVP = proj * view * currentModel;
-    geometryPass.draw(planeVertices, planeIndices,
-                      std::bind_back(geometryVS, currentModel, currentMVP),
-                      [&](int x, int y, const MyVarying &in) {
-                        albedoBuffer->at(x, y) = 'F';
-                        normalBuffer->at(x, y) = in.normal;
-                        worldPosBuffer->at(x, y) = in.worldPos;
-                      });
+    geometryPass.draw(
+        planeVertices, planeIndices,
+        std::bind_back(Shaders::geometryVS, currentModel, currentMVP),
+        [&](int x, int y, const Shaders::DefaultVarying &in) {
+          albedoBuffer->at(x, y) = 'F';
+          normalBuffer->at(x, y) = in.normal;
+          worldPosBuffer->at(x, y) = in.worldPos;
+        });
 
     // ジオメトリパス側にも世界の回転角を同期
     currentModel = Mat4::translate(0.0f, 0.3f, 0.0f) *
                    Mat4::rotateY(world.angleY) * Mat4::rotateX(world.angleX);
     currentMVP = proj * view * currentModel;
-    geometryPass.draw(cubeVertices, cubeIndices,
-                      std::bind_back(geometryVS, currentModel, currentMVP),
-                      [&](int x, int y, const MyVarying &in) {
-                        albedoBuffer->at(x, y) = 'C';
-                        normalBuffer->at(x, y) = in.normal;
-                        worldPosBuffer->at(x, y) = in.worldPos;
-                      });
+    geometryPass.draw(
+        cubeVertices, cubeIndices,
+        std::bind_back(Shaders::geometryVS, currentModel, currentMVP),
+        [&](int x, int y, const Shaders::DefaultVarying &in) {
+          albedoBuffer->at(x, y) = 'C';
+          normalBuffer->at(x, y) = in.normal;
+          worldPosBuffer->at(x, y) = in.worldPos;
+        });
 
     // --- PASS 3: ライティングパス ---
     auto lightingPass = device.create_compute_pass();
     lightingPass.execute(
         w, h,
-        std::bind_back(deferredLightingCS, std::ref(outputTexture),
+        std::bind_back(Shaders::deferredLightingCS, std::ref(outputTexture),
                        std::cref(*albedoBuffer), std::cref(*normalBuffer),
                        std::cref(*worldPosBuffer), std::cref(*shadowDepth),
                        std::cref(lightSpaceMatrix), lightDir, w, h));

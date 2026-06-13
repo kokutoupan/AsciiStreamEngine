@@ -11,40 +11,10 @@
 #include "GraphicsDevice.hpp"
 #include "Math.hpp"
 #include "Texture2D.hpp"
-
-inline char mapIntensityToChar(float intensity) {
-  const char *palette = " .'`^\",:;Il!i~+_-?][}"
-                        "{1)(|\\/tfjrxnuvczXYUJCLQ0OZmwqpdbkhao*#MW&8%B@$";
-  int len = strlen(palette);
-  int idx = (int)(intensity * (len - 1));
-  if (idx < 0)
-    idx = 0;
-  if (idx >= len)
-    idx = len - 1;
-  return palette[idx];
-}
-
-struct MyVarying {
-  Vec3 normal;
-  Vec2 uv;
-  Vec3 worldPos;
-
-  MyVarying operator+(const MyVarying &r) const {
-    return {normal + r.normal, uv + r.uv, worldPos + r.worldPos};
-  }
-  MyVarying operator*(float s) const {
-    return {normal * s, uv * s, worldPos * s};
-  }
-};
-
-struct InputVertex {
-  Vec3 position;
-  Vec3 normal;
-  Vec2 uv;
-};
+#include "DefaultShaders.hpp"
 
 // --- アセット定義 ---
-std::vector<InputVertex> cubeVertices = {
+std::vector<Shaders::DefaultVertex> cubeVertices = {
     {{1, -1, -1}, {0, 0, -1}, {0.0f, 1.0f}},
     {{-1, -1, -1}, {0, 0, -1}, {1.0f, 1.0f}},
     {{-1, 1, -1}, {0, 0, -1}, {1.0f, 0.0f}},
@@ -73,78 +43,12 @@ std::vector<int> cubeIndices = {0,  1,  2,  0,  2,  3,  4,  5,  6,  4,  6,  7,
                                 8,  9,  10, 8,  10, 11, 12, 13, 14, 12, 14, 15,
                                 16, 17, 18, 16, 18, 19, 20, 21, 22, 20, 22, 23};
 
-std::vector<InputVertex> planeVertices = {
+std::vector<Shaders::DefaultVertex> planeVertices = {
     {{-10, -1.5f, -15}, {0, 1, 0}, {0.0f, 10.0f}},
     {{10, -1.5f, -15}, {0, 1, 0}, {10.0f, 10.0f}},
     {{10, -1.5f, 2}, {0, 1, 0}, {10.0f, 0.0f}},
     {{-10, -1.5f, 2}, {0, 1, 0}, {0.0f, 0.0f}}};
 std::vector<int> planeIndices = {0, 2, 1, 0, 3, 2};
-
-// ==========================================
-// SHADER FUNCTIONS
-// ==========================================
-
-// シャドウパス用頂点シェーダー
-auto shadowVS = [](const InputVertex &in, const Mat4 &model,
-                   const Mat4 &lightSpace) -> std::pair<Vec4, Vec3> {
-  Vec3 worldPos = model.transform(in.position);
-  Vec4 pos =
-      lightSpace.transform(Vec4(worldPos.x, worldPos.y, worldPos.z, 1.0f));
-  return {pos, worldPos};
-};
-
-// ジオメトリパス用頂点シェーダー
-auto geometryVS = [](const InputVertex &in, const Mat4 &model,
-                     const Mat4 &mvp) -> std::pair<Vec4, MyVarying> {
-  Vec4 pos =
-      mvp.transform(Vec4(in.position.x, in.position.y, in.position.z, 1.0f));
-  MyVarying outVar;
-  outVar.normal = model.transform(in.normal).normalize();
-  outVar.uv = in.uv;
-  outVar.worldPos = model.transform(in.position);
-  return {pos, outVar};
-};
-
-// ディファードライティング用コンピュート（ピクセル）シェーダー
-auto deferredLightingCS =
-    [](int x, int y, Texture2D<char> &colorBuf,
-       const Texture2D<char> &albedoBuf, const Texture2D<Vec3> &normalBuf,
-       const Texture2D<Vec3> &worldPosBuf, const Texture2D<float> &shadowDepth,
-       const Mat4 &lightSpace, const Vec3 &lightDir, int w, int h) {
-      char mtl = albedoBuf.at(x, y);
-      if (mtl == ' ')
-        return;
-
-      Vec3 worldPos = worldPosBuf.at(x, y);
-      Vec3 normal = normalBuf.at(x, y);
-
-      // 1. シャドウ判定
-      Vec4 posInLightSpace =
-          lightSpace.transform(Vec4(worldPos.x, worldPos.y, worldPos.z, 1.0f));
-      float shadowX = (posInLightSpace.x + 1.0f) * 0.5f * (float)w;
-      float shadowY = (1.0f - posInLightSpace.y) * 0.5f * (float)h;
-
-      float shadowFactor = 1.0f;
-      if (shadowX >= 0 && shadowX < w && shadowY >= 0 && shadowY < h) {
-        float closestDepth = shadowDepth.at((int)shadowX, (int)shadowY);
-        float currentDepth = posInLightSpace.z;
-        if (currentDepth > closestDepth + 0.002f) {
-          shadowFactor = 0.2f;
-        }
-      }
-
-      // 2. ライティング
-      float diff = std::max(0.0f, normal.dot(lightDir));
-      float col = (diff * shadowFactor) + 0.1f;
-      col = std::min(1.0f, col);
-
-      if (mtl == 'C') {
-        colorBuf.at(x, y) = mapIntensityToChar(col);
-      } else if (mtl == 'F') {
-        colorBuf.at(x, y) =
-            (shadowFactor < 1.0f) ? ':' : mapIntensityToChar(col * 0.5f);
-      }
-    };
 
 int main() {
   int w = 80, h = 24;
@@ -193,22 +97,22 @@ int main() {
     // PASS 1: シャドウパス
     // ==========================================
     auto shadowPass =
-        device.create_rasterize_pass<InputVertex, Vec3, float>(shadowDepth);
+        device.create_rasterize_pass<Shaders::DefaultVertex, Vec3, float>(shadowDepth);
 
     currentModel.identity();
     shadowPass.draw(planeVertices, planeIndices,
-                    std::bind_back(shadowVS, currentModel, lightSpaceMatrix));
+                    std::bind_back(Shaders::shadowVS, currentModel, lightSpaceMatrix));
 
     currentModel = Mat4::translate(0.0f, 0.3f, 0.0f) * Mat4::rotateY(angleY) *
                    Mat4::rotateX(angleX);
     shadowPass.draw(cubeVertices, cubeIndices,
-                    std::bind_back(shadowVS, currentModel, lightSpaceMatrix));
+                    std::bind_back(Shaders::shadowVS, currentModel, lightSpaceMatrix));
 
     // ==========================================
     // PASS 2: ジオメトリパス (Gバッファへの書き込み)
     // ==========================================
     auto geometryPass =
-        device.create_rasterize_pass<InputVertex, MyVarying, float>(
+        device.create_rasterize_pass<Shaders::DefaultVertex, Shaders::DefaultVarying, float>(
             cameraDepth);
 
     // 2-1. 床
@@ -216,8 +120,8 @@ int main() {
     currentModel.identity();
     currentMVP = proj * view * currentModel;
     geometryPass.draw(planeVertices, planeIndices,
-                      std::bind_back(geometryVS, currentModel, currentMVP),
-                      [&](int x, int y, const MyVarying &in) {
+                      std::bind_back(Shaders::geometryVS, currentModel, currentMVP),
+                      [&](int x, int y, const Shaders::DefaultVarying &in) {
                         albedoBuffer.at(x, y) = 'F';
                         normalBuffer.at(x, y) = in.normal;
                         worldPosBuffer.at(x, y) = in.worldPos;
@@ -228,8 +132,8 @@ int main() {
                    Mat4::rotateX(angleX);
     currentMVP = proj * view * currentModel;
     geometryPass.draw(cubeVertices, cubeIndices,
-                      std::bind_back(geometryVS, currentModel, currentMVP),
-                      [&](int x, int y, const MyVarying &in) {
+                      std::bind_back(Shaders::geometryVS, currentModel, currentMVP),
+                      [&](int x, int y, const Shaders::DefaultVarying &in) {
                         albedoBuffer.at(x, y) = 'C';
                         normalBuffer.at(x, y) = in.normal;
                         worldPosBuffer.at(x, y) = in.worldPos;
@@ -242,7 +146,7 @@ int main() {
 
     lightingPass.execute(
         w, h,
-        std::bind_back(deferredLightingCS, std::ref(colorBuffer),
+        std::bind_back(Shaders::deferredLightingCS, std::ref(colorBuffer),
                        std::cref(albedoBuffer), std::cref(normalBuffer),
                        std::cref(worldPosBuffer), std::cref(shadowDepth),
                        lightSpaceMatrix, lightDir, w, h));
