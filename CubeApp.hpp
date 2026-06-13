@@ -4,17 +4,49 @@
 #include <cmath>
 #include <functional>
 #include <limits>
-#include <math.h>
 #include <memory>
-#include <stdlib.h>
-#include <string.h>
-#include <unistd.h>
 #include <vector>
 
 #include "ConnectionContext.hpp"
+#include "GameWorld.hpp"
 #include "GraphicsDevice.hpp"
 #include "Math.hpp"
 #include "Texture2D.hpp"
+
+// =============================================================================
+// 1. グローバルな世界の共有状態クラス (矢印キーでキューブが同期回転)
+// =============================================================================
+class MyGameWorld : public GameWorld {
+public:
+  float angleX = 0.0f;
+  float angleY = 0.0f;
+
+  void processPlayerInput(int clientId, const InputDevice &input) override {
+    // 矢印キーでグローバルな角度を更新
+    if (input.getKey(Key::Left))
+      angleY -= 0.05f;
+    if (input.getKey(Key::Right))
+      angleY += 0.05f;
+    if (input.getKey(Key::Up))
+      angleX -= 0.05f;
+    if (input.getKey(Key::Down))
+      angleX += 0.05f;
+
+    // スペースキーで一斉リセット
+    if (input.getKeyDown(Key::Space)) {
+      angleX = 0.0f;
+      angleY = 0.0f;
+    }
+  }
+
+  void globalUpdate() override {
+    // 全入力が処理された後の共通物理やNPC制御などがあればここに記述
+  }
+};
+
+// =============================================================================
+// 2. 各クライアントごとの個別セッションクラス (WASDキーで自分だけのカメラ移動)
+// =============================================================================
 
 inline char mapIntensityToChar(float intensity) {
   const char *palette = " .'`^\",:;Il!i~+_-?][}{1)(|\\/"
@@ -28,12 +60,14 @@ inline char mapIntensityToChar(float intensity) {
   return palette[idx];
 }
 
-class CubeApp : public ConnectionContext {
+class MyPlayerSession : public ConnectionContext<MyGameWorld> {
 private:
+  int m_clientId = -1;
   int w = 80, h = 24;
-  float angleX = 0.0f;
-  float angleY = 0.0f;
   float aspect = 1.0f;
+
+  // 各クライアントが個別に持つローカルなカメラ座標
+  Vec3 m_cameraPos = Vec3(0.0f, 0.0f, -4.5f);
 
   GraphicsDevice device;
   std::unique_ptr<Texture2D<float>> cameraDepth;
@@ -45,7 +79,6 @@ private:
   Mat4 lightSpaceMatrix;
   Vec3 lightDir;
 
-  // インラインアセット定義
   struct InputVertex {
     Vec3 position;
     Vec3 normal;
@@ -69,14 +102,13 @@ private:
   std::vector<int> planeIndices;
 
 public:
-  CubeApp() {
+  MyPlayerSession() {
     lightDir = Vec3(0.0f, 1.0f, 0.0f).normalize();
     float pi_half = 3.14159265f / 2.0f;
     Mat4 lightView = Mat4::translate(0, 0, -5.0f) * Mat4::rotateX(pi_half) *
                      Mat4::rotateY(0.0f);
     float boxSize = 8.0f;
 
-    // アセット初期化 (元コードのデータをコピー)
     cubeVertices = {{{1, -1, -1}, {0, 0, -1}, {0.0f, 1.0f}},
                     {{-1, -1, -1}, {0, 0, -1}, {1.0f, 1.0f}},
                     {{-1, 1, -1}, {0, 0, -1}, {1.0f, 0.0f}},
@@ -110,20 +142,20 @@ public:
                      {{-10, -1.5f, 2}, {0, 1, 0}, {0.0f, 0.0f}}};
     planeIndices = {0, 2, 1, 0, 3, 2};
 
-    // ライトスペース行列の事前計算
-    // ※ w, hが決まる前に一度デフォルトで構築
-    aspect = (float)w / (float)h * 0.5f;
+    aspect = (float)w / (float)h *
+             0.5f; // アスペクト比補正 (フォントの縦横比1:2を考慮)
     Mat4 lightProj = Mat4::orthographic(-8.0f * aspect, 8.0f * aspect, -8.0f,
                                         8.0f, 0.1f, 10.0f);
     lightSpaceMatrix = lightProj * lightView;
   }
 
-  void init(int width, int height) override {
+  void init(int clientId, int width, int height, MyGameWorld &world) override {
+    m_clientId = clientId;
     w = width;
     h = height;
-    aspect = (float)w / (float)h * 0.5f;
+    aspect = (float)w / (float)h *
+             0.5f; // アスペクト比補正 (フォントの縦横比1:2を考慮)
 
-    // ライトプロジェクションの再計算
     float pi_half = 3.14159265f / 2.0f;
     Mat4 lightView = Mat4::translate(0, 0, -5.0f) * Mat4::rotateX(pi_half) *
                      Mat4::rotateY(0.0f);
@@ -131,7 +163,6 @@ public:
                                         8.0f, 0.1f, 10.0f);
     lightSpaceMatrix = lightProj * lightView;
 
-    // 各種バッファの生成/リサイズ
     cameraDepth = std::make_unique<Texture2D<float>>(
         w, h, std::numeric_limits<float>::max());
     shadowDepth = std::make_unique<Texture2D<float>>(
@@ -141,33 +172,27 @@ public:
     worldPosBuffer = std::make_unique<Texture2D<Vec3>>(w, h, Vec3(0, 0, 0));
   }
 
-  void update(const InputDevice &input) override {
-    if (input.getKey(Key::A) || input.getKey(Key::a) ||
-        input.getKey(Key::Right)) {
-      angleY -= 0.05f;
-    }
-    if (input.getKey(Key::D) || input.getKey(Key::d) ||
-        input.getKey(Key::Left)) {
-      angleY += 0.05f;
-    }
-    if (input.getKey(Key::W) || input.getKey(Key::w) || input.getKey(Key::Up)) {
-      angleX -= 0.05f;
-    }
-    if (input.getKey(Key::S) || input.getKey(Key::s) ||
-        input.getKey(Key::Down)) {
-      angleX += 0.05f;
-    }
+  void onDisconnect(MyGameWorld &world) override {}
 
-    // getKeyDownのテスト（スペースを押した瞬間にちょっと特殊な挙動をさせるなど）
-    if (input.getKeyDown(Key::Space)) {
-      // 例: 回転角をパッとリセット
-      angleX = 0.0f;
-      angleY = 0.0f;
-    }
+  void update(int clientId, const InputDevice &input,
+              MyGameWorld &world) override {
+    // 1. 矢印操作要求をグローバルな共有世界へ転送
+    world.processPlayerInput(clientId, input);
+
+    // 2. WASD操作は自分自身のローカルカメラの座標移動に適用
+    float camSpeed = 0.1f;
+    if (input.getKey(Key::a) || input.getKey(Key::A))
+      m_cameraPos.x -= camSpeed;
+    if (input.getKey(Key::d) || input.getKey(Key::D))
+      m_cameraPos.x += camSpeed;
+    if (input.getKey(Key::w) || input.getKey(Key::W))
+      m_cameraPos.z += camSpeed;
+    if (input.getKey(Key::s) || input.getKey(Key::S))
+      m_cameraPos.z -= camSpeed;
   }
 
-  void render(Texture2D<char> &outputTexture) override {
-    // バッファクリア
+  void render(Texture2D<char> &outputTexture,
+              const MyGameWorld &world) override {
     outputTexture.clear(' ');
     cameraDepth->clear(std::numeric_limits<float>::max());
     shadowDepth->clear(std::numeric_limits<float>::max());
@@ -175,10 +200,10 @@ public:
     normalBuffer->clear(Vec3(0, 0, 0));
     worldPosBuffer->clear(Vec3(0, 0, 0));
 
-    Mat4 view = Mat4::translate(0, 0, -4.5f);
+    // 個別のカメラ位置を反映してビュー行列を作る
+    Mat4 view = Mat4::translate(m_cameraPos.x, m_cameraPos.y, m_cameraPos.z);
     Mat4 proj = Mat4::perspective(1.0f, aspect, 0.1f, 100.0f);
 
-    // シェーダー定義
     auto shadowVS = [](const InputVertex &in, const Mat4 &model,
                        const Mat4 &lightSpace) -> std::pair<Vec4, Vec3> {
       Vec3 worldPos = model.transform(in.position);
@@ -212,7 +237,6 @@ public:
       Vec3 worldPos = worldPosBuf.at(x, y);
       Vec3 normal = normalBuf.at(x, y);
 
-      // 1. シャドウ判定
       Vec4 posInLightSpace =
           lightSpace.transform(Vec4(worldPos.x, worldPos.y, worldPos.z, 1.0f));
       float shadowX = (posInLightSpace.x + 1.0f) * 0.5f * (float)w;
@@ -221,23 +245,18 @@ public:
       float shadowFactor = 1.0f;
       if (shadowX >= 0 && shadowX < w && shadowY >= 0 && shadowY < h) {
         float closestDepth = shadowDepth.at((int)shadowX, (int)shadowY);
-        float currentDepth = posInLightSpace.z;
-        if (currentDepth > closestDepth + 0.002f) {
+        if (posInLightSpace.z > closestDepth + 0.002f)
           shadowFactor = 0.2f;
-        }
       }
 
-      // 2. ライティング
       float diff = std::max(0.0f, normal.dot(lightDir));
-      float col = (diff * shadowFactor) + 0.1f;
-      col = std::min(1.0f, col);
+      float col = std::min(1.0f, (diff * shadowFactor) + 0.1f);
 
-      if (mtl == 'C') {
+      if (mtl == 'C')
         colorBuf.at(x, y) = mapIntensityToChar(col);
-      } else if (mtl == 'F') {
+      else if (mtl == 'F')
         colorBuf.at(x, y) =
             (shadowFactor < 1.0f) ? ':' : mapIntensityToChar(col * 0.5f);
-      }
     };
 
     // --- PASS 1: シャドウパス ---
@@ -248,8 +267,10 @@ public:
     shadowPass.draw(planeVertices, planeIndices,
                     std::bind_back(shadowVS, currentModel, lightSpaceMatrix));
 
-    currentModel = Mat4::translate(0.0f, 0.3f, 0.0f) * Mat4::rotateY(angleY) *
-                   Mat4::rotateX(angleX);
+    // 【共有空間との同期】世界の回転角 (world.angleX / world.angleY)
+    // をモデル行列にバインドする！
+    currentModel = Mat4::translate(0.0f, 0.3f, 0.0f) *
+                   Mat4::rotateY(world.angleY) * Mat4::rotateX(world.angleX);
     shadowPass.draw(cubeVertices, cubeIndices,
                     std::bind_back(shadowVS, currentModel, lightSpaceMatrix));
 
@@ -267,8 +288,9 @@ public:
                         worldPosBuffer->at(x, y) = in.worldPos;
                       });
 
-    currentModel = Mat4::translate(0.0f, 0.3f, 0.0f) * Mat4::rotateY(angleY) *
-                   Mat4::rotateX(angleX);
+    // ジオメトリパス側にも世界の回転角を同期
+    currentModel = Mat4::translate(0.0f, 0.3f, 0.0f) *
+                   Mat4::rotateY(world.angleY) * Mat4::rotateX(world.angleX);
     currentMVP = proj * view * currentModel;
     geometryPass.draw(cubeVertices, cubeIndices,
                       std::bind_back(geometryVS, currentModel, currentMVP),

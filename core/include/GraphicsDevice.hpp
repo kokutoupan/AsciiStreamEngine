@@ -40,7 +40,7 @@ public:
   GraphicsDevice() = default;
 
   // --- RasterizePass の定義 ---
-  // Varyingはoprater + ,*が必要
+  // Varyingは operator + と operator * が必要 (補間計算のため)
   template <typename InputVertex, IsVarying Varying, typename DepthT = float>
   class RasterizePass {
   private:
@@ -183,11 +183,9 @@ public:
       int targetWidth = m_depthBuffer.getWidth();
       int targetHeight = m_depthBuffer.getHeight();
 
-      // 補間計算用に、1/W でスケールされた状態の Varying
-      // 属性を保持する内部構造体
+      // 深度描画用に座標と1/Wのみを保持する内部構造体
       struct ShadedVertex {
-        Vec4 screenPos; // X, Y はスクリーン空間座標、Z は深度テスト用、W は 1/W
-                        // 保持用
+        Vec4 screenPos; // X, Y はスクリーン空間座標、Z は深度テスト用、W は 1/W 保持用
         float invW;     // 1 / W
       };
 
