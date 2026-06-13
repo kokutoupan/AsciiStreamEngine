@@ -12,16 +12,8 @@ if(UNIX)
   set(LIBS m)
 endif()
 
+include_directories(core/include)
+
 add_subdirectory(core)
-
-# サーバー側
-add_executable(server server.cpp)
-target_link_libraries(server PRIVATE ascii3d_core ${LIBS} ZLIB::ZLIB)
-
-# クライアント側
-add_executable(client client.cpp)
-target_link_libraries(client PRIVATE ascii3d_core ${LIBS} ZLIB::ZLIB)
-
-# テスト
-add_executable(test renderer_sample.cpp)
-target_link_libraries(test PRIVATE ascii3d_core ${LIBS})
+add_subdirectory(client)
+add_subdirectory(examples)
