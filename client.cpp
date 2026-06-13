@@ -1,14 +1,14 @@
-
 #include <errno.h>
 #include <netdb.h>
 #include <netinet/in.h>
 #include <poll.h>
 #include <stdint.h>
 #include <stdio.h>
+#include <stdlib.h>
 #include <sys/ioctl.h>
-#include <sys/poll.h>
 #include <sys/socket.h>
 #include <sys/types.h>
+#include <termios.h>
 #include <unistd.h>
 
 #include <zconf.h>
@@ -16,6 +16,23 @@
 
 #define HOST_PORT "12345"
 #define HOST_DOMAIN "localhost"
+
+struct termios orig_termios;
+
+// 終了時にターミナルの設定を元に戻す
+void disable_raw_mode() { tcsetattr(STDIN_FILENO, TCSAFLUSH, &orig_termios); }
+
+// ターミナルを Raw モード（Enterなしで1文字ずつ即時取得）に変える
+void enable_raw_mode() {
+  tcgetattr(STDIN_FILENO, &orig_termios);
+  atexit(disable_raw_mode); // プログラム終了時に必ず復元
+
+  struct termios raw = orig_termios;
+  // カノニカルモード（行単位入力）と、入力のエコー（画面表示）をオフにする
+  raw.c_lflag &= ~(ECHO | ICANON);
+
+  tcsetattr(STDIN_FILENO, TCSAFLUSH, &raw);
+}
 
 int recv_exact(int fd, void *buf, size_t len) {
   size_t recvd = 0;
@@ -33,7 +50,6 @@ int recv_exact(int fd, void *buf, size_t len) {
 }
 
 int main(int argc, char *argv[]) {
-
   const char *port = HOST_PORT;
   const char *host = HOST_DOMAIN;
   int opt;
@@ -45,12 +61,12 @@ int main(int argc, char *argv[]) {
     case 'h':
       host = optarg;
       break;
-
     default:
       fprintf(stderr, "usage: %s [-p port] [-h domain]\n", argv[0]);
       return 1;
     }
   }
+
   struct addrinfo hints = {}, *res;
   hints.ai_socktype = SOCK_STREAM;
   hints.ai_family = AF_INET;
@@ -78,37 +94,58 @@ int main(int argc, char *argv[]) {
     h = ws.ws_row;
   }
 
-  // 構造体に詰めて送る
   uint16_t size_packet[2] = {htons(w), htons(h)};
   write(fd, size_packet, sizeof(size_packet));
+
+  // 接続が確立したらターミナルをRawモード化
+  enable_raw_mode();
 
   unsigned char buffer[65536];
   unsigned char out_buf[65536];
 
+  // I/O多重化のための poll 設定
+  struct pollfd fds[2];
+  fds[0].fd = STDIN_FILENO; // ユーザーのキーボード入力
+  fds[0].events = POLLIN;
+  fds[1].fd = fd; // サーバーからの画面パケット
+  fds[1].events = POLLIN;
+
   while (1) {
-    uint32_t net_len;
-    if (recv(fd, &net_len, 4, 0) <= 0) {
+    int ret = poll(fds, 2, -1); // イベントが来るまで無限ブロック
+    if (ret < 0) {
+      if (errno == EINTR)
+        continue;
       break;
     }
 
-    int len_oder = ntohl(net_len);
-    // printf("%d\n", len_oder);
-
-    int len = recv_exact(fd, buffer, len_oder);
-    // printf("%d\n", len);
-
-    uLongf out_len = sizeof(out_buf);
-    int res = uncompress(out_buf, &out_len, buffer, len);
-
-    if (res == Z_OK) {
-      write(1, out_buf, out_len);
+    // イベント1: キーボードから入力があった場合、サーバーへ即転送
+    if (fds[0].revents & POLLIN) {
+      char ch;
+      if (read(STDIN_FILENO, &ch, 1) > 0) {
+        // サーバー側へ送信！
+        send(fd, &ch, 1, 0);
+      }
     }
 
-    // int len = recv(fd, buffer, 65536, 0);
-    // if (len <= 0) {
-    //   break;
-    // }
-    // write(1, buffer, len);
+    // イベント2: サーバーから描画データが届いた場合、デコードして出力
+    if (fds[1].revents & POLLIN) {
+      uint32_t net_len;
+      if (recv(fd, &net_len, 4, 0) <= 0) {
+        break; // サーバー切断
+      }
+
+      int len_oder = ntohl(net_len);
+      int len = recv_exact(fd, buffer, len_oder);
+      if (len <= 0)
+        break;
+
+      uLongf out_len = sizeof(out_buf);
+      int res = uncompress(out_buf, &out_len, buffer, len);
+
+      if (res == Z_OK) {
+        write(1, out_buf, out_len);
+      }
+    }
   }
 
   close(fd);
