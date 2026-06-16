@@ -1,9 +1,9 @@
 #pragma once
 
-#include "Math.hpp"
 #include "Texture2D.hpp"
 #include <algorithm>
 #include <concepts>
+#include <glm/glm.hpp>
 #include <limits>
 #include <utility>
 #include <vector>
@@ -13,12 +13,12 @@ concept IsVarying = requires(T a, T b, float s) {
   { a + b } -> std::same_as<T>;
   { a * s } -> std::same_as<T>;
 };
-// VertexShaderの制約 (InputVertex -> std::pair<Vec4, Varying>)
+// VertexShaderの制約 (InputVertex -> std::pair<glm::vec4, Varying>)
 template <typename F, typename InputVertex, typename Varying>
 concept IsVertexShader = requires(F &&shader, const InputVertex &vertex) {
   {
     std::forward<F>(shader)(vertex)
-  } -> std::convertible_to<std::pair<Vec4, Varying>>;
+  } -> std::convertible_to<std::pair<glm::vec4, Varying>>;
 };
 
 // FragmentShaderの制約 (int, int, const Varying& -> void)
@@ -46,7 +46,8 @@ public:
     Texture2D<DepthT> &m_depthBuffer;
 
     // エッジ関数の内部計算用
-    inline float edgeFunction(const Vec2 &a, const Vec2 &b, const Vec2 &c) {
+    inline float edgeFunction(const glm::vec2 &a, const glm::vec2 &b,
+                              const glm::vec2 &c) {
       return (c.x - a.x) * (b.y - a.y) - (c.y - a.y) * (b.x - a.x);
     }
 
@@ -66,10 +67,10 @@ public:
       // 補間計算用に、1/W でスケールされた状態の Varying
       // 属性を保持する内部構造体
       struct ShadedVertex {
-        Vec4 screenPos; // X, Y はスクリーン空間座標、Z は深度テスト用、W は 1/W
-                        // 保持用
-        float invW;     // 1 / W
-        Varying varInvW; // Varying * (1 / W)
+        glm::vec4 screenPos; // X, Y はスクリーン空間座標、Z は深度テスト用、W
+                             // は 1/W 保持用
+        float invW;          // 1 / W
+        Varying varInvW;     // Varying * (1 / W)
       };
 
       std::vector<ShadedVertex> shadedVertices;
@@ -77,7 +78,7 @@ public:
 
       for (const auto &v : vertices) {
         auto result = vertexShader(v);
-        Vec4 clipPos = result.first;
+        glm::vec4 clipPos = result.first;
         Varying origVar = result.second;
 
         // 簡易ニアプレーン・クリッピングガード
@@ -88,7 +89,7 @@ public:
         float invW = 1.0f / clipPos.w;
 
         // NDC -> スクリーン空間座標への変換
-        Vec4 sPos;
+        glm::vec4 sPos;
         sPos.x = (clipPos.x * invW + 1.0f) * 0.5f * (float)targetWidth;
         sPos.y = (1.0f - clipPos.y * invW) * 0.5f * (float)targetHeight;
         sPos.z = clipPos.z * invW; // 深度テスト用のZバッファ値
@@ -123,9 +124,9 @@ public:
             (int)std::max({v0.screenPos.y, v1.screenPos.y, v2.screenPos.y}) +
                 1);
 
-        Vec2 sp0 = {v0.screenPos.x, v0.screenPos.y};
-        Vec2 sp1 = {v1.screenPos.x, v1.screenPos.y};
-        Vec2 sp2 = {v2.screenPos.x, v2.screenPos.y};
+        glm::vec2 sp0 = {v0.screenPos.x, v0.screenPos.y};
+        glm::vec2 sp1 = {v1.screenPos.x, v1.screenPos.y};
+        glm::vec2 sp2 = {v2.screenPos.x, v2.screenPos.y};
 
         float area = edgeFunction(sp0, sp1, sp2);
         if (area <= 0)
@@ -133,7 +134,7 @@ public:
 
         for (int y = minY; y <= maxY; ++y) {
           for (int x = minX; x <= maxX; ++x) {
-            Vec2 p = {(float)x, (float)y};
+            glm::vec2 p = {(float)x, (float)y};
 
             float w0 = edgeFunction(sp1, sp2, p);
             float w1 = edgeFunction(sp2, sp0, p);
@@ -184,9 +185,9 @@ public:
 
       // 深度描画用に座標と1/Wのみを保持する内部構造体
       struct ShadedVertex {
-        Vec4 screenPos; // X, Y はスクリーン空間座標、Z は深度テスト用、W は 1/W
-                        // 保持用
-        float invW;     // 1 / W
+        glm::vec4 screenPos; // X, Y はスクリーン空間座標、Z は深度テスト用、W
+                             // は 1/W 保持用
+        float invW;          // 1 / W
       };
 
       std::vector<ShadedVertex> shadedVertices;
@@ -194,7 +195,7 @@ public:
 
       for (const auto &v : vertices) {
         auto result = vertexShader(v);
-        Vec4 clipPos = result.first;
+        glm::vec4 clipPos = result.first;
 
         // 簡易ニアプレーン・クリッピングガード
         if (clipPos.w <= 0.001f) {
@@ -204,7 +205,7 @@ public:
         float invW = 1.0f / clipPos.w;
 
         // NDC -> スクリーン空間座標への変換
-        Vec4 sPos;
+        glm::vec4 sPos;
         sPos.x = (clipPos.x * invW + 1.0f) * 0.5f * (float)targetWidth;
         sPos.y = (1.0f - clipPos.y * invW) * 0.5f * (float)targetHeight;
         sPos.z = clipPos.z * invW; // 深度テスト用のZバッファ値
@@ -236,9 +237,9 @@ public:
             (int)std::max({v0.screenPos.y, v1.screenPos.y, v2.screenPos.y}) +
                 1);
 
-        Vec2 sp0 = {v0.screenPos.x, v0.screenPos.y};
-        Vec2 sp1 = {v1.screenPos.x, v1.screenPos.y};
-        Vec2 sp2 = {v2.screenPos.x, v2.screenPos.y};
+        glm::vec2 sp0 = {v0.screenPos.x, v0.screenPos.y};
+        glm::vec2 sp1 = {v1.screenPos.x, v1.screenPos.y};
+        glm::vec2 sp2 = {v2.screenPos.x, v2.screenPos.y};
 
         float area = edgeFunction(sp0, sp1, sp2);
         if (area <= 0)
@@ -246,7 +247,7 @@ public:
 
         for (int y = minY; y <= maxY; ++y) {
           for (int x = minX; x <= maxX; ++x) {
-            Vec2 p = {(float)x, (float)y};
+            glm::vec2 p = {(float)x, (float)y};
 
             float w0 = edgeFunction(sp1, sp2, p);
             float w1 = edgeFunction(sp2, sp0, p);

@@ -8,10 +8,11 @@
 #include <unistd.h>
 #include <vector>
 
-#include "GraphicsDevice.hpp"
-#include "Math.hpp"
-#include "Texture2D.hpp"
 #include "DefaultShaders.hpp"
+#include "GraphicsDevice.hpp"
+#include "Texture2D.hpp"
+#include <glm/glm.hpp>
+#include <glm/gtc/matrix_transform.hpp>
 
 // --- アセット定義 ---
 std::vector<Shaders::DefaultVertex> cubeVertices = {
@@ -61,83 +62,93 @@ int main() {
 
   // Gバッファ群
   auto albedoBuffer = Texture2D<char>(w, h, ' ');
-  auto normalBuffer = Texture2D<Vec3>(w, h, Vec3(0, 0, 0));
-  auto worldPosBuffer = Texture2D<Vec3>(w, h, Vec3(0, 0, 0));
+  auto normalBuffer = Texture2D<glm::vec3>(w, h, glm::vec3(0, 0, 0));
+  auto worldPosBuffer = Texture2D<glm::vec3>(w, h, glm::vec3(0, 0, 0));
 
   float angleX = 0.0f, angleY = 0.0f;
   const char *clear_seq = "\x1b[2J";
 
-  Vec3 lightDir = Vec3(0.0f, 1.0f, 0.0f).normalize();
+  glm::vec3 lightDir = glm::normalize(glm::vec3(0.0f, 1.0f, 0.0f));
   float pi_half = 3.14159265f / 2.0f;
-  Mat4 lightView = Mat4::translate(0, 0, -5.0f) * Mat4::rotateX(pi_half) *
-                   Mat4::rotateY(0.0f);
+  glm::mat4 lightView =
+      glm::translate(glm::mat4(1.0f), glm::vec3(0, 0, -5.0f)) *
+      glm::rotate(glm::mat4(1.0f), pi_half, glm::vec3(1.0f, 0.0f, 0.0f)) *
+      glm::rotate(glm::mat4(1.0f), 0.0f, glm::vec3(0.0f, 1.0f, 0.0f));
   float boxSize = 8.0f;
   float aspect = (float)w / (float)h * 0.5f;
-  Mat4 lightProj = Mat4::orthographic(-boxSize * aspect, boxSize * aspect,
-                                      -boxSize, boxSize, 0.1f, 10.0f);
-  Mat4 lightSpaceMatrix = lightProj * lightView;
+  glm::mat4 lightProj = glm::ortho(-boxSize * aspect, boxSize * aspect,
+                                   -boxSize, boxSize, 0.1f, 10.0f);
+  glm::mat4 lightSpaceMatrix = lightProj * lightView;
 
   std::vector<char> outputStream((w + 1) * h + 1, '\0');
 
-  Mat4 currentModel;
-  Mat4 currentMVP;
+  glm::mat4 currentModel(1.0f);
+  glm::mat4 currentMVP(1.0f);
 
   while (true) {
     colorBuffer.clear(' ');
     cameraDepth.clear(std::numeric_limits<float>::max());
     shadowDepth.clear(std::numeric_limits<float>::max());
     albedoBuffer.clear(' ');
-    normalBuffer.clear(Vec3(0, 0, 0));
-    worldPosBuffer.clear(Vec3(0, 0, 0));
+    normalBuffer.clear(glm::vec3(0, 0, 0));
+    worldPosBuffer.clear(glm::vec3(0, 0, 0));
 
-    Mat4 view = Mat4::translate(0, 0, -4.5f);
-    Mat4 proj = Mat4::perspective(1.0f, aspect, 0.1f, 100.0f);
+    glm::mat4 view = glm::translate(glm::mat4(1.0f), glm::vec3(0, 0, -4.5f));
+    glm::mat4 proj = glm::perspective(1.0f, aspect, 0.1f, 100.0f);
 
     // ==========================================
     // PASS 1: シャドウパス
     // ==========================================
     auto shadowPass =
-        device.create_rasterize_pass<Shaders::DefaultVertex, Vec3, float>(shadowDepth);
+        device.create_rasterize_pass<Shaders::DefaultVertex, glm::vec3, float>(
+            shadowDepth);
 
-    currentModel.identity();
-    shadowPass.draw(planeVertices, planeIndices,
-                    std::bind_back(Shaders::shadowVS, currentModel, lightSpaceMatrix));
+    currentModel = glm::mat4(1.0f);
+    shadowPass.draw(
+        planeVertices, planeIndices,
+        std::bind_back(Shaders::shadowVS, currentModel, lightSpaceMatrix));
 
-    currentModel = Mat4::translate(0.0f, 0.3f, 0.0f) * Mat4::rotateY(angleY) *
-                   Mat4::rotateX(angleX);
-    shadowPass.draw(cubeVertices, cubeIndices,
-                    std::bind_back(Shaders::shadowVS, currentModel, lightSpaceMatrix));
+    currentModel =
+        glm::translate(glm::mat4(1.0f), glm::vec3(0.0f, 0.3f, 0.0f)) *
+        glm::rotate(glm::mat4(1.0f), angleY, glm::vec3(0.0f, 1.0f, 0.0f)) *
+        glm::rotate(glm::mat4(1.0f), angleX, glm::vec3(1.0f, 0.0f, 0.0f));
+    shadowPass.draw(
+        cubeVertices, cubeIndices,
+        std::bind_back(Shaders::shadowVS, currentModel, lightSpaceMatrix));
 
     // ==========================================
     // PASS 2: ジオメトリパス (Gバッファへの書き込み)
     // ==========================================
-    auto geometryPass =
-        device.create_rasterize_pass<Shaders::DefaultVertex, Shaders::DefaultVarying, float>(
-            cameraDepth);
+    auto geometryPass = device.create_rasterize_pass<
+        Shaders::DefaultVertex, Shaders::DefaultVarying, float>(cameraDepth);
 
     // 2-1. 床
 
-    currentModel.identity();
+    currentModel = glm::mat4(1.0f);
     currentMVP = proj * view * currentModel;
-    geometryPass.draw(planeVertices, planeIndices,
-                      std::bind_back(Shaders::geometryVS, currentModel, currentMVP),
-                      [&](int x, int y, const Shaders::DefaultVarying &in) {
-                        albedoBuffer.at(x, y) = 'F';
-                        normalBuffer.at(x, y) = in.normal;
-                        worldPosBuffer.at(x, y) = in.worldPos;
-                      });
+    geometryPass.draw(
+        planeVertices, planeIndices,
+        std::bind_back(Shaders::geometryVS, currentModel, currentMVP),
+        [&](int x, int y, const Shaders::DefaultVarying &in) {
+          albedoBuffer.at(x, y) = 'F';
+          normalBuffer.at(x, y) = in.normal;
+          worldPosBuffer.at(x, y) = in.worldPos;
+        });
 
     // 2-2. キューブ
-    currentModel = Mat4::translate(0.0f, 0.3f, 0.0f) * Mat4::rotateY(angleY) *
-                   Mat4::rotateX(angleX);
+    currentModel =
+        glm::translate(glm::mat4(1.0f), glm::vec3(0.0f, 0.3f, 0.0f)) *
+        glm::rotate(glm::mat4(1.0f), angleY, glm::vec3(0.0f, 1.0f, 0.0f)) *
+        glm::rotate(glm::mat4(1.0f), angleX, glm::vec3(1.0f, 0.0f, 0.0f));
     currentMVP = proj * view * currentModel;
-    geometryPass.draw(cubeVertices, cubeIndices,
-                      std::bind_back(Shaders::geometryVS, currentModel, currentMVP),
-                      [&](int x, int y, const Shaders::DefaultVarying &in) {
-                        albedoBuffer.at(x, y) = 'C';
-                        normalBuffer.at(x, y) = in.normal;
-                        worldPosBuffer.at(x, y) = in.worldPos;
-                      });
+    geometryPass.draw(
+        cubeVertices, cubeIndices,
+        std::bind_back(Shaders::geometryVS, currentModel, currentMVP),
+        [&](int x, int y, const Shaders::DefaultVarying &in) {
+          albedoBuffer.at(x, y) = 'C';
+          normalBuffer.at(x, y) = in.normal;
+          worldPosBuffer.at(x, y) = in.worldPos;
+        });
 
     // ==========================================
     // PASS 3: ライティングパス
