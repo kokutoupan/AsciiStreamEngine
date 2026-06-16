@@ -1,7 +1,9 @@
 #pragma once
 
 #include <algorithm>
+#include <chrono>
 #include <cmath>
+#include <cstdio>
 #include <functional>
 #include <limits>
 #include <memory>
@@ -13,6 +15,7 @@
 #include "GraphicsDevice.hpp"
 #include "Math.hpp"
 #include "Texture2D.hpp"
+#include "TextureUtil.hpp"
 
 // =============================================================================
 // 1. グローバルな世界の共有状態クラス (矢印キーでキューブが同期回転)
@@ -23,15 +26,16 @@ public:
   float angleY = 0.0f;
 
   void processPlayerInput(int clientId, const InputDevice &input) override {
+    float rotSpeed = 1.5f * input.getDeltaTime();
     // 矢印キーでグローバルな角度を更新
     if (input.getKey(Key::Left))
-      angleY -= 0.05f;
+      angleY -= rotSpeed;
     if (input.getKey(Key::Right))
-      angleY += 0.05f;
+      angleY += rotSpeed;
     if (input.getKey(Key::Up))
-      angleX -= 0.05f;
+      angleX -= rotSpeed;
     if (input.getKey(Key::Down))
-      angleX += 0.05f;
+      angleX += rotSpeed;
 
     // スペースキーで一斉リセット
     if (input.getKeyDown(Key::Space)) {
@@ -73,8 +77,11 @@ private:
   std::vector<Shaders::DefaultVertex> planeVertices;
   std::vector<int> planeIndices;
 
+  std::chrono::steady_clock::time_point m_lastFrameTime;
+
 public:
   MyPlayerSession() {
+    m_lastFrameTime = std::chrono::steady_clock::now();
     lightDir = Vec3(0.0f, 1.0f, 0.0f).normalize();
     float pi_half = 3.14159265f / 2.0f;
     Mat4 lightView = Mat4::translate(0, 0, -5.0f) * Mat4::rotateX(pi_half) *
@@ -127,6 +134,7 @@ public:
     h = height;
     aspect = (float)w / (float)h *
              0.5f; // アスペクト比補正 (フォントの縦横比1:2を考慮)
+    m_lastFrameTime = std::chrono::steady_clock::now();
 
     float pi_half = 3.14159265f / 2.0f;
     Mat4 lightView = Mat4::translate(0, 0, -5.0f) * Mat4::rotateX(pi_half) *
@@ -152,7 +160,7 @@ public:
     world.processPlayerInput(clientId, input);
 
     // 2. WASD操作は自分自身のローカルカメラの座標移動に適用
-    float camSpeed = 0.1f;
+    float camSpeed = 3.0f * input.getDeltaTime();
     if (input.getKey(Key::a) || input.getKey(Key::A))
       m_cameraPos.x -= camSpeed;
     if (input.getKey(Key::d) || input.getKey(Key::D))
@@ -165,6 +173,12 @@ public:
 
   void render(Texture2D<char> &outputTexture,
               const MyGameWorld &world) override {
+    auto renderStart = std::chrono::steady_clock::now();
+    double frameDeltaMs =
+        std::chrono::duration<double, std::milli>(renderStart - m_lastFrameTime)
+            .count();
+    m_lastFrameTime = renderStart;
+
     outputTexture.clear(' ');
     cameraDepth->clear(std::numeric_limits<float>::max());
     shadowDepth->clear(std::numeric_limits<float>::max());
@@ -229,5 +243,19 @@ public:
                        std::cref(*albedoBuffer), std::cref(*normalBuffer),
                        std::cref(*worldPosBuffer), std::cref(*shadowDepth),
                        std::cref(lightSpaceMatrix), lightDir, w, h));
+
+    auto renderEnd = std::chrono::steady_clock::now();
+    double renderTimeMs =
+        std::chrono::duration<double, std::milli>(renderEnd - renderStart)
+            .count();
+
+    char infoBuf[128];
+    std::snprintf(infoBuf, sizeof(infoBuf),
+                  "FPS: %.1f (%.2f ms)\nRender: %.2f ms",
+                  (frameDeltaMs > 0.0 ? 1000.0 / frameDeltaMs : 0.0),
+                  frameDeltaMs, renderTimeMs);
+
+    Texture2D<char> textTex = TextureUtil::strToTexture(infoBuf, ' ');
+    TextureUtil::blit_texture(outputTexture, textTex, 0, 0);
   }
 };

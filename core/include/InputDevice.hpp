@@ -95,12 +95,16 @@ class InputDevice {
 private:
   bool key_states[static_cast<size_t>(Key::Count)] = {false};
   bool prev_key_states[static_cast<size_t>(Key::Count)] = {false};
+  float delta_time = 0.0f;
 
   // エスケープシーケンス解析用のステート
   enum class ParseState { Normal, ExpectBracket, ExpectSequence };
   ParseState parse_state = ParseState::Normal;
 
 public:
+  float getDeltaTime() const { return delta_time; }
+  void setDeltaTime(float dt) { delta_time = dt; }
+
   bool getKey(Key k) const {
     if (k == Key::Unknown || k == Key::Count)
       return false;

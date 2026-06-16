@@ -186,7 +186,7 @@ public:
       struct ShadedVertex {
         Vec4 screenPos; // X, Y はスクリーン空間座標、Z は深度テスト用、W は 1/W
                         // 保持用
-        float invW; // 1 / W
+        float invW;     // 1 / W
       };
 
       std::vector<ShadedVertex> shadedVertices;

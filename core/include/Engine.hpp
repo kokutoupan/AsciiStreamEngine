@@ -1,5 +1,6 @@
 #pragma once
 #include <arpa/inet.h>
+#include <chrono>
 #include <cstring>
 #include <memory>
 #include <netinet/in.h>
@@ -52,9 +53,11 @@ private:
   };
 
   std::unordered_map<int, ClientSession> m_sessions;
+  float m_targetFps = 30.0f;
 
 public:
-  Engine(int port = 12345) : m_port(port) {}
+  Engine(int port = 12345, float targetFps = 30.0f)
+      : m_port(port), m_targetFps(targetFps > 0.0f ? targetFps : 30.0f) {}
   ~Engine() {
     if (m_serverSock >= 0)
       close(m_serverSock);
@@ -90,9 +93,21 @@ public:
     m_pollFds.push_back({m_serverSock, POLLIN, 0});
     printf("AsciiStreamEngine core running on port %d...\n", m_port);
 
+    auto lastFrameStart = std::chrono::steady_clock::now();
+    float deltaTime = 1.0f / m_targetFps;
+
     while (true) {
+      auto frameStart = std::chrono::steady_clock::now();
+      double elapsedMs =
+          std::chrono::duration<double, std::milli>(frameStart - lastFrameStart)
+              .count();
+      if (elapsedMs > 0.0) {
+        deltaTime = static_cast<float>(elapsedMs / 1000.0);
+      }
+      lastFrameStart = frameStart;
+
       int ret = poll(m_pollFds.data(), m_pollFds.size(),
-                     16); // 16ms タイムアウト (約60FPSでポーリング)
+                     2); // 2ms timeout for responsiveness
       if (ret < 0) {
         perror("poll failed");
         break;
@@ -141,14 +156,18 @@ public:
             session.colorBuffer = std::make_unique<Texture2D<char>>(
                 session.width, session.height, ' ');
 
-            // 送信用平坦化バッファの初期化 (\x1b[2J + 各行の末尾改行)
+            const char *CLEAR_SCREEN_SEQ = "\x1b[2J\x1b[H";
+            size_t seq_len = 7;
+
+            // 送信用平坦化バッファの初期化 (シーケンス分 + 各行の文字と改行)
             session.outputBuffer.resize(
-                4 + (session.width + 1) * session.height + 1, '\0');
-            std::copy("\x1b[2J", "\x1b[2J" + 4, session.outputBuffer.begin());
-            for (int y = 0; y < session.height; ++y) {
-              session
-                  .outputBuffer[4 + (session.width + 1) * y + session.width] =
-                  '\n';
+                seq_len + (session.width + 1) * session.height, '\0');
+            std::copy(CLEAR_SCREEN_SEQ, CLEAR_SCREEN_SEQ + seq_len,
+                      session.outputBuffer.begin());
+
+            for (int y = 0; y < session.height - 1; ++y) {
+              session.outputBuffer[seq_len + (session.width + 1) * y +
+                                   session.width] = '\n';
             }
             session.outputBuffer[session.outputBuffer.size() - 1] = '\0';
             session.size_initialized = true;
@@ -176,6 +195,7 @@ public:
       for (auto &[fd, session] : m_sessions) {
         if (!session.size_initialized)
           continue;
+        session.input.setDeltaTime(deltaTime);
         session.context->update(fd, session.input, m_world);
       }
 
@@ -190,7 +210,7 @@ public:
         // 利用者の描画関数を実行（StateからViewを再構成）
         session.context->render(*session.colorBuffer, m_world);
 
-        size_t streamIdx = 4;
+        size_t streamIdx = 7;
         int w = session.width;
         int h = session.height;
         for (int y = 0; y < h; ++y) {
@@ -208,7 +228,15 @@ public:
         session.input.nextFrame();
       }
 
-      usleep(33000); // 約30FPS
+      auto frameEnd = std::chrono::steady_clock::now();
+      double activeTimeMs =
+          std::chrono::duration<double, std::milli>(frameEnd - frameStart)
+              .count();
+      double targetFrameTimeMs = 1000.0 / m_targetFps;
+      double sleepTimeMs = targetFrameTimeMs - activeTimeMs;
+      if (sleepTimeMs > 0.0) {
+        usleep(static_cast<useconds_t>(sleepTimeMs * 1000.0));
+      }
     }
 
     return false;
