@@ -1,7 +1,5 @@
 #include <algorithm>
 #include <cmath>
-#include <cstdlib>
-#include <cstring>
 #include <functional>
 #include <iostream>
 #include <limits>

@@ -3,7 +3,7 @@
 #include <algorithm>
 #include <chrono>
 #include <cmath>
-#include <cstdio>
+#include <format>
 #include <functional>
 #include <limits>
 #include <memory>
@@ -306,13 +306,12 @@ public:
         std::chrono::duration<double, std::milli>(renderEnd - renderStart)
             .count();
 
-    char infoBuf[128];
-    std::snprintf(infoBuf, sizeof(infoBuf),
-                  "FPS: %.1f (%.2f ms)\nRender: %.2f ms",
-                  (frameDeltaMs > 0.0 ? 1000.0 / frameDeltaMs : 0.0),
-                  frameDeltaMs, renderTimeMs);
+    std::string infoStr =
+        std::format("FPS: {:.1f} ({:.2f} ms)\nRender: {:.2f} ms",
+                    (frameDeltaMs > 0.0 ? 1000.0 / frameDeltaMs : 0.0),
+                    frameDeltaMs, renderTimeMs);
 
-    Texture2D<char> textTex = TextureUtil::strToTexture(infoBuf, ' ');
+    Texture2D<char> textTex = TextureUtil::strToTexture(infoStr, ' ');
     TextureUtil::blit_texture(outputTexture, textTex, 0, 0);
   }
 };

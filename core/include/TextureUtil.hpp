@@ -1,11 +1,10 @@
 #pragma once
-#include "Texture2D.hpp"
 #include <algorithm>
-#include <cstring> // std::memcpy 用
-#include <sstream>
 #include <string>
 #include <string_view>
 #include <vector>
+
+#include "Texture2D.hpp"
 
 namespace TextureUtil {
 
@@ -98,7 +97,7 @@ inline void blit_texture(Texture2D<T> &dst, const Texture2D<T> &src, int posX,
     const T *srcRow = src.getData() + (srcY * srcW) + srcStartX;
 
     // 透過処理がない場合は、1行丸ごと一撃でコピー
-    std::memcpy(dstRow, srcRow, copyWidth * sizeof(T));
+    std::copy_n(srcRow, copyWidth, dstRow);
   }
 }
 

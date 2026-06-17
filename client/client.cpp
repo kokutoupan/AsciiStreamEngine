@@ -1,8 +1,9 @@
-#include <errno.h>
-#include <stdint.h>
-#include <stdio.h>
-#include <stdlib.h>
-#include <string.h>
+#include <cerrno>
+#include <cstdint>
+#include <cstdlib>
+#include <iostream>
+#include <print>
+#include <string_view>
 
 // =============================================================================
 // OS固有のヘッダー定義とシステムコール/ネイティブAPIのマッピング
@@ -211,14 +212,15 @@ int main(int argc, char* argv[]) {
 
     // Windows環境対応の簡易引数解析 
     for (int i = 1; i < argc; i++) {
-        if (strcmp(argv[i], "-p") == 0 && i + 1 < argc) {
+        std::string_view arg(argv[i]);
+        if (arg == "-p" && i + 1 < argc) {
             port = argv[++i];
         }
-        else if (strcmp(argv[i], "-h") == 0 && i + 1 < argc) {
+        else if (arg == "-h" && i + 1 < argc) {
             host = argv[++i];
         }
         else {
-            fprintf(stderr, "usage: %s [-p port] [-h domain]\n", argv[0]);
+            std::println(std::cerr, "usage: {} [-p port] [-h domain]", argv[0]);
             return 1;
         }
     }
@@ -227,7 +229,7 @@ int main(int argc, char* argv[]) {
     // Windows固有：ネットワークサブシステムの初期化システムコール呼び出し
     WSADATA wsaData;
     if (WSAStartup(MAKEWORD(2, 2), &wsaData) != 0) {
-        fprintf(stderr, "WSAStartup failed\n");
+        std::println(std::cerr, "WSAStartup failed");
         return -1;
     }
 #endif
@@ -237,25 +239,25 @@ int main(int argc, char* argv[]) {
     hints.ai_family = AF_INET;
     int result = getaddrinfo(host, port, &hints, &res);
     if (result) {
-        fprintf(stderr, "info error: %d\n", result);
+        std::println(std::cerr, "info error: {}", result);
         return -1;
     }
 
     int fd = (int)socket(res->ai_family, res->ai_socktype, res->ai_protocol);
     if (fd < 0) {
 #if defined(_WIN32)
-        fprintf(stderr, "error socket:%d\n", WSAGetLastError());
+        std::println(std::cerr, "error socket:{}", WSAGetLastError());
 #else
-        fprintf(stderr, "error socket:%d\n", errno);
+        std::println(std::cerr, "error socket:{}", errno);
 #endif
         return -1;
     }
 
     if (connect(fd, res->ai_addr, (int)res->ai_addrlen) < 0) {
 #if defined(_WIN32)
-        fprintf(stderr, "failed connect: %d;\n", WSAGetLastError());
+        std::println(std::cerr, "failed connect: {};", WSAGetLastError());
 #else
-        fprintf(stderr, "failed connect: %d;\n", errno);
+        std::println(std::cerr, "failed connect: {};", errno);
 #endif
         return -1;
     }
