@@ -20,3 +20,6 @@ CMakeUserPresets.json
 
 build/
 .cache/
+
+out/
+.vs

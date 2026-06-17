@@ -5,8 +5,9 @@
 #include <functional>
 #include <iostream>
 #include <limits>
-#include <unistd.h>
 #include <vector>
+#include <thread>
+#include <chrono>
 
 #include "DefaultShaders.hpp"
 #include "GraphicsDevice.hpp"
@@ -178,7 +179,7 @@ int main() {
 
     angleX += 0.05f;
     angleY += 0.03f;
-    usleep(50000);
+	std::this_thread::sleep_for(std::chrono::milliseconds(50));
   }
   return 0;
 }

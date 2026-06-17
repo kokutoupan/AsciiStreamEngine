@@ -5,7 +5,33 @@ set(CMAKE_EXPORT_COMPILE_COMMANDS ON)
 set(CMAKE_CXX_STANDARD 23)
 set(CMAKE_CXX_STANDARD_REQUIRED True)
 
-find_package(ZLIB  REQUIRED)
+
+find_package(ZLIB)
+
+if(ZLIB_FOUND)
+    message(STATUS "Found system ZLIB: ${ZLIB_LIBRARIES}")
+    # システムの ZLIB が見つかった場合は、そのまま ZLIB::ZLIB ターゲットが利用可能
+else()
+    message(STATUS "System ZLIB not found. Downloading via FetchContent...")
+    
+    include(FetchContent)
+    FetchContent_Declare(
+        zlib
+        GIT_REPOSITORY https://github.com/madler/zlib.git
+        GIT_TAG        v1.3.1
+    )
+    set(ZLIB_BUILD_EXAMPLES OFF CACHE INTERNAL "")
+    FetchContent_MakeAvailable(zlib)
+
+    # FetchContent が生成した zlibstatic ターゲットを ZLIB::ZLIB としてエイリアス化
+    if(NOT TARGET ZLIB::ZLIB)
+        if(TARGET zlibstatic)
+            add_library(ZLIB::ZLIB INTERFACE IMPORTED)
+            target_link_libraries(ZLIB::ZLIB INTERFACE zlibstatic)
+            target_include_directories(ZLIB::ZLIB INTERFACE ${zlib_SOURCE_DIR} ${zlib_BINARY_DIR})
+        endif()
+    endif()
+endif()
 
 # ==========================================
 # 1. GLMの追加 (FetchContent)
@@ -27,6 +53,8 @@ FetchContent_MakeAvailable(glm)
 # 数学ライブラリのリンクが必要な場合があるため
 if(UNIX)
   set(LIBS m)
+elseif(WIN32)
+  set(LIBS ws2_32) # 先述のWindows用ソケット
 endif()
 
 include_directories(core/include shaders)
