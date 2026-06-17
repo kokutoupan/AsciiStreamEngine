@@ -146,21 +146,25 @@ public:
               w2 /= area;
 
               // 1. スクリーン空間上で線形補間しても問題ない擬似深度Zの計算
-              DepthT z = v0.screenPos.z * w0 + v1.screenPos.z * w1 +
-                         v2.screenPos.z * w2;
+              float interpolatedInvW =
+                  v0.invW * w0 + v1.invW * w1 + v2.invW * w2;
+              // 実際のピクセルの w（距離）を復元する
+              float pixelW =
+                  1.0f / (interpolatedInvW != 0.0f ? interpolatedInvW : 1.0f);
+
+              // 各頂点の (clipPos.z / clipPos.w) に 1/w をかけた属性を補間する
+              float var0 = v0.screenPos.z;
+              float var1 = v1.screenPos.z;
+              float var2 = v2.screenPos.z;
+
+              // 画面上で線形補間したあと、pixelW
+              // を掛け算して正しい「距離（Z）」を復元する
+              DepthT z = (var0 * w0 + var1 * w1 + var2 * w2) * pixelW;
 
               // 固定機能：Zテスト
               if (z < m_depthBuffer.at(x, y)) {
                 m_depthBuffer.at(x, y) = z;
 
-                // 2.パースペクティブ・コレクト・インタポレーションによる属性復元
-                float interpolatedInvW =
-                    v0.invW * w0 + v1.invW * w1 + v2.invW * w2;
-
-                float pixelW =
-                    1.0f / (interpolatedInvW != 0.0f ? interpolatedInvW : 1.0f);
-
-                // 次に、スクリーン上で線形変化する (Varying * 1/W) を補間
                 Varying interpolatedVarInvW =
                     v0.varInvW * w0 + v1.varInvW * w1 + v2.varInvW * w2;
 
@@ -259,8 +263,20 @@ public:
               w2 /= area;
 
               // 1. スクリーン空間上で線形補間しても問題ない擬似深度Zの計算
-              DepthT z = v0.screenPos.z * w0 + v1.screenPos.z * w1 +
-                         v2.screenPos.z * w2;
+              float interpolatedInvW =
+                  v0.invW * w0 + v1.invW * w1 + v2.invW * w2;
+              // 実際のピクセルの w（距離）を復元する
+              float pixelW =
+                  1.0f / (interpolatedInvW != 0.0f ? interpolatedInvW : 1.0f);
+
+              // 各頂点の (clipPos.z / clipPos.w) に 1/w をかけた属性を補間する
+              float var0 = v0.screenPos.z;
+              float var1 = v1.screenPos.z;
+              float var2 = v2.screenPos.z;
+
+              // 画面上で線形補間したあと、pixelW
+              // を掛け算して正しい「距離（Z）」を復元する
+              DepthT z = (var0 * w0 + var1 * w1 + var2 * w2) * pixelW;
 
               // 固定機能：Zテスト
               if (z < m_depthBuffer.at(x, y)) {

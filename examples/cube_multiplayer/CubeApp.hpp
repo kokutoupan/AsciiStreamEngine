@@ -209,6 +209,10 @@ public:
       m_cameraPos -= cameraRight * camSpeed;
     if (input.getKey(Key::d) || input.getKey(Key::D))
       m_cameraPos += cameraRight * camSpeed;
+    if (input.getKey(Key::e) || input.getKey(Key::E))
+      m_cameraPos += glm::vec3(0, 1, 0) * camSpeed;
+    if (input.getKey(Key::q) || input.getKey(Key::Q))
+      m_cameraPos -= glm::vec3(0, 1, 0) * camSpeed;
   }
 
   void render(Texture2D<char> &outputTexture,
@@ -295,6 +299,7 @@ public:
                        std::cref(*albedoBuffer), std::cref(*normalBuffer),
                        std::cref(*worldPosBuffer), std::cref(*shadowDepth),
                        std::cref(lightSpaceMatrix), lightDir, w, h));
+    // TextureUtil::blit_texture(outputTexture, *albedoBuffer, 0, 0);
 
     auto renderEnd = std::chrono::steady_clock::now();
     double renderTimeMs =
