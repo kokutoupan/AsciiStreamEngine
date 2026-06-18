@@ -14,9 +14,18 @@
 // OS固有のネットワーク・システムコールヘッダーの切り替え
 // =============================================================================
 #if defined(_WIN32) || defined(_WIN64)
-#include <windows.h>
+#ifndef WIN32_LEAN_AND_MEAN
+    #define WIN32_LEAN_AND_MEAN // windows.h が古い winsock.h を巻き込むのを防ぐ
+#endif
+#ifndef NOMINMAX
+    #define NOMINMAX            // windows.h の max/min マクロが std::max と衝突するのを防ぐ
+#endif
+
 #include <winsock2.h>
 #include <ws2tcpip.h>
+
+// 最後
+#include <windows.h>
 #define close closesocket
 #else
 #include <arpa/inet.h>

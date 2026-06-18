@@ -5,6 +5,10 @@ set(CMAKE_EXPORT_COMPILE_COMMANDS ON)
 set(CMAKE_CXX_STANDARD 23)
 set(CMAKE_CXX_STANDARD_REQUIRED True)
 
+if(MSVC)
+  # ソースコードの読み込み(source-set)も実行時(execution-set)もすべてUTF-8として処理させる
+  add_compile_options(/utf-8)
+endif()
 
 find_package(ZLIB)
 
