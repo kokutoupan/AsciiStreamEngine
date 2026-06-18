@@ -232,8 +232,8 @@ public:
             session.colorBuffer = std::make_unique<Texture2D<char>>(
                 session.width, session.height, ' ');
 
-            const char *CLEAR_SCREEN_SEQ = "\x1b[2J\x1b[H";
-            size_t seq_len = 7;
+            const char *CLEAR_SCREEN_SEQ = "\x1b[H";
+            size_t seq_len = 3;
 
             session.outputBuffer.resize(
                 seq_len + (session.width + 1) * session.height, '\0');
@@ -296,7 +296,7 @@ public:
 
         session.context->render(*session.colorBuffer, m_world);
 
-        size_t streamIdx = 7;
+        size_t streamIdx = 3;
         int w = session.width;
         int h = session.height;
         for (int y = 0; y < h; ++y) {

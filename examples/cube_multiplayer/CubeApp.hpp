@@ -82,6 +82,9 @@ private:
 
   std::chrono::steady_clock::time_point m_lastFrameTime;
 
+  const int sw = 128;
+  const int sh = 128;
+
 public:
   MyPlayerSession() {
     m_lastFrameTime = std::chrono::steady_clock::now();
@@ -159,7 +162,7 @@ public:
     cameraDepth = std::make_unique<Texture2D<float>>(
         w, h, std::numeric_limits<float>::max());
     shadowDepth = std::make_unique<Texture2D<float>>(
-        w, h, std::numeric_limits<float>::max());
+        sw, sh, std::numeric_limits<float>::max());
     albedoBuffer = std::make_unique<Texture2D<char>>(w, h, ' ');
     normalBuffer =
         std::make_unique<Texture2D<glm::vec3>>(w, h, glm::vec3(0, 0, 0));
@@ -239,7 +242,25 @@ public:
 
     glm::mat4 view = glm::lookAt(m_cameraPos, m_cameraPos + cameraFront,
                                  glm::vec3(0.0f, 1.0f, 0.0f));
-    glm::mat4 proj = glm::perspective(1.0f, aspect, 0.1f, 100.0f);
+    glm::mat4 proj = glm::perspective(0.6f, aspect, 0.1f, 100.0f);
+
+    glm::vec3 shadowCenter = m_cameraPos + cameraFront * 5.0f;
+
+    float lightDistance = 20.0f; // 影を描画するためのライトの高さ（距離）
+    glm::vec3 lightPos = shadowCenter + (lightDir * lightDistance);
+
+    glm::vec3 lightUp = glm::vec3(0.0f, 1.0f, 0.0f);
+    if (std::abs(lightDir.y) > 0.99f) {
+      lightUp = glm::vec3(0.0f, 0.0f, 1.0f); // 真上の場合はZ軸を上とする
+    }
+
+    glm::mat4 lightView = glm::lookAt(lightPos, shadowCenter, lightUp);
+
+    float orthoSize = 10.0f;
+    glm::mat4 lightProj =
+        glm::ortho(-orthoSize, orthoSize, -orthoSize, orthoSize, 1.0f, 50.0f);
+
+    lightSpaceMatrix = lightProj * lightView;
 
     // --- PASS 1: シャドウパス ---
     auto shadowPass =

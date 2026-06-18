@@ -65,49 +65,58 @@ public:
 
       // 補間計算用に、1/W でスケールされた状態の Varying
       // 属性を保持する内部構造体
-      struct ShadedVertex {
-        glm::vec4 screenPos; // X, Y はスクリーン空間座標、Z は深度テスト用、W
-                             // は 1/W 保持用
-        float invW;          // 1 / W
-        Varying varInvW;     // Varying * (1 / W)
+      struct VSOutput {
+        glm::vec4 clipPos;
+        Varying var;
       };
 
-      std::vector<ShadedVertex> shadedVertices;
-      shadedVertices.reserve(vertices.size());
-
+      std::vector<VSOutput> vsOutputs;
+      vsOutputs.reserve(vertices.size());
       for (const auto &v : vertices) {
         auto result = vertexShader(v);
-        glm::vec4 clipPos = result.first;
-        Varying origVar = result.second;
+        vsOutputs.push_back({result.first, result.second});
+      }
+      // 補間計算用に、1/W でスケールされた状態の属性を保持する構造体
+      struct ShadedVertex {
+        glm::vec4 screenPos;
+        float invW;
+        Varying varInvW;
+      };
 
-        // 簡易ニアプレーン・クリッピングガード
-        if (clipPos.w <= 0.001f) {
-          clipPos.w = 0.001f;
+      const float W_PLANE = 0.001f;
+      // エッジがニアプレーンと交差する点の補間計算
+      auto clipEdge = [W_PLANE](const VSOutput &in,
+                                const VSOutput &out) -> VSOutput {
+        float t = (in.clipPos.w - W_PLANE) / (in.clipPos.w - out.clipPos.w);
+        VSOutput res;
+        // 座標とVaryingを線形補間
+        res.clipPos = in.clipPos * (1.0f - t) + out.clipPos * t;
+        res.var = in.var * (1.0f - t) + out.var * t;
+        return res;
+      };
+
+      // クリップ処理を通過した「安全な三角形」を画面に描画するローカル関数
+      auto rasterizeTriangle = [&](const VSOutput &v0_in, const VSOutput &v1_in,
+                                   const VSOutput &v2_in) {
+        ShadedVertex sv[3];
+        const VSOutput *tri[3] = {&v0_in, &v1_in, &v2_in};
+
+        // NDC -> スクリーン空間座標への変換と、1/W 乗算
+        for (int j = 0; j < 3; ++j) {
+          float invW = 1.0f / tri[j]->clipPos.w;
+          glm::vec4 sPos;
+          sPos.x =
+              (tri[j]->clipPos.x * invW + 1.0f) * 0.5f * (float)targetWidth;
+          sPos.y =
+              (1.0f - tri[j]->clipPos.y * invW) * 0.5f * (float)targetHeight;
+          sPos.z = tri[j]->clipPos.z * invW;
+          sPos.w = invW;
+          sv[j] = {sPos, invW, tri[j]->var * invW};
         }
 
-        float invW = 1.0f / clipPos.w;
-
-        // NDC -> スクリーン空間座標への変換
-        glm::vec4 sPos;
-        sPos.x = (clipPos.x * invW + 1.0f) * 0.5f * (float)targetWidth;
-        sPos.y = (1.0f - clipPos.y * invW) * 0.5f * (float)targetHeight;
-        sPos.z = clipPos.z * invW; // 深度テスト用のZバッファ値
-        sPos.w = invW;             // 補間用に格納
-
-        // 属性に 1/W を乗算しておく（パースペクティブ・コレクトの準備）
-        Varying varInvW = origVar * invW;
-
-        shadedVertices.push_back({sPos, invW, varInvW});
-      }
-
-      // 2. ラスタライズステージ
-      for (size_t i = 0; i < indices.size(); i += 3) {
-        if (i + 2 >= indices.size())
-          break;
-
-        const auto &v0 = shadedVertices[indices[i]];
-        const auto &v1 = shadedVertices[indices[i + 1]];
-        const auto &v2 = shadedVertices[indices[i + 2]];
+        const auto &v0 = sv[0];
+        const auto &v1 = sv[1];
+        const auto &v2 = sv[2];
 
         // バウンディングボックスの計算
         int minX = std::max(
@@ -129,12 +138,11 @@ public:
 
         float area = edgeFunction(sp0, sp1, sp2);
         if (area <= 0)
-          continue; // バックフェースカリング
+          return; // バックフェースカリング
 
         for (int y = minY; y <= maxY; ++y) {
           for (int x = minX; x <= maxX; ++x) {
             glm::vec2 p = {(float)x, (float)y};
-
             float w0 = edgeFunction(sp1, sp2, p);
             float w1 = edgeFunction(sp2, sp0, p);
             float w2 = edgeFunction(sp0, sp1, p);
@@ -144,36 +152,67 @@ public:
               w1 /= area;
               w2 /= area;
 
-              // 1. スクリーン空間上で線形補間しても問題ない擬似深度Zの計算
               float interpolatedInvW =
                   v0.invW * w0 + v1.invW * w1 + v2.invW * w2;
-              // 実際のピクセルの w（距離）を復元する
               float pixelW =
                   1.0f / (interpolatedInvW != 0.0f ? interpolatedInvW : 1.0f);
 
-              // 各頂点の (clipPos.z / clipPos.w) に 1/w をかけた属性を補間する
               float var0 = v0.screenPos.z;
               float var1 = v1.screenPos.z;
               float var2 = v2.screenPos.z;
-
-              // 画面上で線形補間したあと、pixelW
-              // を掛け算して正しい「距離（Z）」を復元する
               DepthT z = (var0 * w0 + var1 * w1 + var2 * w2) * pixelW;
 
-              // 固定機能：Zテスト
               if (z < m_depthBuffer.at(x, y)) {
                 m_depthBuffer.at(x, y) = z;
-
                 Varying interpolatedVarInvW =
                     v0.varInvW * w0 + v1.varInvW * w1 + v2.varInvW * w2;
-
                 Varying correctVarying = interpolatedVarInvW * pixelW;
-
-                // ユーザーアクションの実行
                 fragmentShader(x, y, correctVarying);
               }
             }
           }
+        }
+      };
+
+      // 2. 三角形ごとのクリッピング＆ラスタライズ
+      for (size_t i = 0; i < indices.size(); i += 3) {
+        if (i + 2 >= indices.size())
+          break;
+
+        VSOutput inputTri[3] = {vsOutputs[indices[i]],
+                                vsOutputs[indices[i + 1]],
+                                vsOutputs[indices[i + 2]]};
+        VSOutput outputPoly[4]; // クリッピング後の多角形（最大で四角形=4頂点）
+        int outCount = 0;
+
+        // ニアプレーンに対するサザーランド・ホッジマン・クリッピング
+        for (int j = 0; j < 3; ++j) {
+          int next = (j + 1) % 3;
+          const VSOutput &currV = inputTri[j];
+          const VSOutput &nextV = inputTri[next];
+
+          bool currInside = currV.clipPos.w >= W_PLANE;
+          bool nextInside = nextV.clipPos.w >= W_PLANE;
+
+          if (currInside) {
+            // 現在の頂点が内側なら追加
+            outputPoly[outCount++] = currV;
+          }
+
+          if (currInside != nextInside) {
+            // 境界をまたいだら交点を計算して追加
+            outputPoly[outCount++] = clipEdge(currV, nextV);
+          }
+        }
+
+        // 構築された多角形（3〜4頂点）を三角形に分割してラスタライズ
+        if (outCount == 3) {
+          // そのままの三角形、または1点だけがカメラ前の小さな三角形
+          rasterizeTriangle(outputPoly[0], outputPoly[1], outputPoly[2]);
+        } else if (outCount == 4) {
+          // 四角形になった場合は2つの三角形に分割 (Triangle Fan方式)
+          rasterizeTriangle(outputPoly[0], outputPoly[1], outputPoly[2]);
+          rasterizeTriangle(outputPoly[0], outputPoly[2], outputPoly[3]);
         }
       }
     }
@@ -186,45 +225,56 @@ public:
       int targetWidth = m_depthBuffer.getWidth();
       int targetHeight = m_depthBuffer.getHeight();
 
-      // 深度描画用に座標と1/Wのみを保持する内部構造体
-      struct ShadedVertex {
-        glm::vec4 screenPos; // X, Y はスクリーン空間座標、Z は深度テスト用、W
-                             // は 1/W 保持用
-        float invW;          // 1 / W
+      struct VSOutput {
+        glm::vec4 clipPos;
       };
 
-      std::vector<ShadedVertex> shadedVertices;
-      shadedVertices.reserve(vertices.size());
-
+      std::vector<VSOutput> vsOutputs;
+      vsOutputs.reserve(vertices.size());
       for (const auto &v : vertices) {
         auto result = vertexShader(v);
-        glm::vec4 clipPos = result.first;
+        vsOutputs.push_back({result.first});
+      }
+      // 補間計算用に、1/W でスケールされた状態の属性を保持する構造体
+      struct ShadedVertex {
+        glm::vec4 screenPos;
+        float invW;
+      };
 
-        // 簡易ニアプレーン・クリッピングガード
-        if (clipPos.w <= 0.001f) {
-          clipPos.w = 0.001f;
+      const float W_PLANE = 0.001f;
+
+      // エッジがニアプレーンと交差する点の補間計算
+      auto clipEdge = [W_PLANE](const VSOutput &in,
+                                const VSOutput &out) -> VSOutput {
+        float t = (in.clipPos.w - W_PLANE) / (in.clipPos.w - out.clipPos.w);
+        VSOutput res;
+        // 座標を線形補間
+        res.clipPos = in.clipPos * (1.0f - t) + out.clipPos * t;
+        return res;
+      };
+
+      // クリップ処理を通過した「安全な三角形」を画面に描画するローカル関数
+      auto rasterizeTriangle = [&](const VSOutput &v0_in, const VSOutput &v1_in,
+                                   const VSOutput &v2_in) {
+        ShadedVertex sv[3];
+        const VSOutput *tri[3] = {&v0_in, &v1_in, &v2_in};
+
+        // NDC -> スクリーン空間座標への変換と、1/W 乗算
+        for (int j = 0; j < 3; ++j) {
+          float invW = 1.0f / tri[j]->clipPos.w;
+          glm::vec4 sPos;
+          sPos.x =
+              (tri[j]->clipPos.x * invW + 1.0f) * 0.5f * (float)targetWidth;
+          sPos.y =
+              (1.0f - tri[j]->clipPos.y * invW) * 0.5f * (float)targetHeight;
+          sPos.z = tri[j]->clipPos.z * invW;
+          sPos.w = invW;
+          sv[j] = {sPos, invW};
         }
 
-        float invW = 1.0f / clipPos.w;
-
-        // NDC -> スクリーン空間座標への変換
-        glm::vec4 sPos;
-        sPos.x = (clipPos.x * invW + 1.0f) * 0.5f * (float)targetWidth;
-        sPos.y = (1.0f - clipPos.y * invW) * 0.5f * (float)targetHeight;
-        sPos.z = clipPos.z * invW; // 深度テスト用のZバッファ値
-        sPos.w = invW;             // 補間用に格納
-
-        shadedVertices.push_back({sPos, invW});
-      }
-
-      // 2. ラスタライズステージ
-      for (size_t i = 0; i < indices.size(); i += 3) {
-        if (i + 2 >= indices.size())
-          break;
-
-        const auto &v0 = shadedVertices[indices[i]];
-        const auto &v1 = shadedVertices[indices[i + 1]];
-        const auto &v2 = shadedVertices[indices[i + 2]];
+        const auto &v0 = sv[0];
+        const auto &v1 = sv[1];
+        const auto &v2 = sv[2];
 
         // バウンディングボックスの計算
         int minX = std::max(
@@ -246,12 +296,11 @@ public:
 
         float area = edgeFunction(sp0, sp1, sp2);
         if (area <= 0)
-          continue; // バックフェースカリング
+          return; // バックフェースカリング
 
         for (int y = minY; y <= maxY; ++y) {
           for (int x = minX; x <= maxX; ++x) {
             glm::vec2 p = {(float)x, (float)y};
-
             float w0 = edgeFunction(sp1, sp2, p);
             float w1 = edgeFunction(sp2, sp0, p);
             float w2 = edgeFunction(sp0, sp1, p);
@@ -261,28 +310,63 @@ public:
               w1 /= area;
               w2 /= area;
 
-              // 1. スクリーン空間上で線形補間しても問題ない擬似深度Zの計算
               float interpolatedInvW =
                   v0.invW * w0 + v1.invW * w1 + v2.invW * w2;
-              // 実際のピクセルの w（距離）を復元する
               float pixelW =
                   1.0f / (interpolatedInvW != 0.0f ? interpolatedInvW : 1.0f);
 
-              // 各頂点の (clipPos.z / clipPos.w) に 1/w をかけた属性を補間する
               float var0 = v0.screenPos.z;
               float var1 = v1.screenPos.z;
               float var2 = v2.screenPos.z;
-
-              // 画面上で線形補間したあと、pixelW
-              // を掛け算して正しい「距離（Z）」を復元する
               DepthT z = (var0 * w0 + var1 * w1 + var2 * w2) * pixelW;
 
-              // 固定機能：Zテスト
               if (z < m_depthBuffer.at(x, y)) {
                 m_depthBuffer.at(x, y) = z;
               }
             }
           }
+        }
+      };
+
+      // 2. 三角形ごとのクリッピング＆ラスタライズ
+      for (size_t i = 0; i < indices.size(); i += 3) {
+        if (i + 2 >= indices.size())
+          break;
+
+        VSOutput inputTri[3] = {vsOutputs[indices[i]],
+                                vsOutputs[indices[i + 1]],
+                                vsOutputs[indices[i + 2]]};
+        VSOutput outputPoly[4]; // クリッピング後の多角形（最大で四角形=4頂点）
+        int outCount = 0;
+
+        // ニアプレーンに対するサザーランド・ホッジマン・クリッピング
+        for (int j = 0; j < 3; ++j) {
+          int next = (j + 1) % 3;
+          const VSOutput &currV = inputTri[j];
+          const VSOutput &nextV = inputTri[next];
+
+          bool currInside = currV.clipPos.w >= W_PLANE;
+          bool nextInside = nextV.clipPos.w >= W_PLANE;
+
+          if (currInside) {
+            // 現在の頂点が内側なら追加
+            outputPoly[outCount++] = currV;
+          }
+
+          if (currInside != nextInside) {
+            // 境界をまたいだら交点を計算して追加
+            outputPoly[outCount++] = clipEdge(currV, nextV);
+          }
+        }
+
+        // 構築された多角形（3〜4頂点）を三角形に分割してラスタライズ
+        if (outCount == 3) {
+          // そのままの三角形、または1点だけがカメラ前の小さな三角形
+          rasterizeTriangle(outputPoly[0], outputPoly[1], outputPoly[2]);
+        } else if (outCount == 4) {
+          // 四角形になった場合は2つの三角形に分割 (Triangle Fan方式)
+          rasterizeTriangle(outputPoly[0], outputPoly[1], outputPoly[2]);
+          rasterizeTriangle(outputPoly[0], outputPoly[2], outputPoly[3]);
         }
       }
     }

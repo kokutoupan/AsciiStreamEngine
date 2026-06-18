@@ -81,12 +81,16 @@ inline void deferredLightingCS(int x, int y, Texture2D<char> &colorBuf,
   glm::vec3 normal = normalBuf.at(x, y);
 
   glm::vec4 posInLightSpace = lightSpace * glm::vec4(worldPos, 1.0f);
-  float shadowX = (posInLightSpace.x + 1.0f) * 0.5f * (float)w;
-  float shadowY = (1.0f - posInLightSpace.y) * 0.5f * (float)h;
+  if (posInLightSpace.w != 0.0f) {
+    posInLightSpace /= posInLightSpace.w;
+  }
+
+  float shadowX = (posInLightSpace.x + 1.0f) * 0.5f;
+  float shadowY = (1.0f - posInLightSpace.y) * 0.5f;
 
   float shadowFactor = 1.0f;
-  if (shadowX >= 0 && shadowX < w && shadowY >= 0 && shadowY < h) {
-    float closestDepth = shadowDepth.at((int)shadowX, (int)shadowY);
+  if (shadowX >= 0 && shadowX < 1 && shadowY >= 0 && shadowY < 1) {
+    float closestDepth = shadowDepth.sampleBilinear(shadowX, shadowY);
     if (posInLightSpace.z > closestDepth + 0.002f)
       shadowFactor = 0.2f;
   }
