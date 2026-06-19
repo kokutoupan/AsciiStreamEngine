@@ -76,7 +76,7 @@ inline void deferredLightingCS(int x, int y, Texture2D<char> &colorBuf,
                                const glm::mat4 &lightSpace,
                                const glm::vec3 &lightDir, int w, int h) {
   char mtl = albedoBuf.at(x, y);
-  if (mtl == ' ')
+  if (mtl == 0)
     return;
 
   glm::vec3 worldPos = worldPosBuf.at(x, y);
@@ -98,7 +98,7 @@ inline void deferredLightingCS(int x, int y, Texture2D<char> &colorBuf,
   }
 
   float diff = std::max(0.0f, glm::dot(normal, lightDir));
-  float col = std::min(1.0f, (diff * shadowFactor) + 0.1f);
+  float col = std::min(1.0f, (diff * shadowFactor * (mtl / 128.0f)) + 0.1f);
 
   colorBuf.at(x, y) = mapIntensityToChar(col);
 }
