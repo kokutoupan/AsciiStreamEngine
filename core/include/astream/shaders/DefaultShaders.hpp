@@ -1,11 +1,13 @@
 #pragma once
 
-#include "ShaderUtil.hpp"
-#include "Texture2D.hpp"
 #include <algorithm>
+#include <utility>
+
+#include <astream/Texture2D.hpp>
+#include <astream/shaders/ShaderUtil.hpp>
+
 #include <glm/glm.hpp>
 #include <glm/gtc/matrix_transform.hpp>
-#include <utility>
 
 namespace Shaders {
 

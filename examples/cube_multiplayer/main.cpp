@@ -1,5 +1,5 @@
 #include "CubeApp.hpp"
-#include "Engine.hpp"
+#include <astream/Engine.hpp>
 
 int main() {
   // 共有世界と個別表示セッションの型を渡してポート12345でエンジンを起動

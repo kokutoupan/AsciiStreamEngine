@@ -1,5 +1,5 @@
 #pragma once
-#include "InputDevice.hpp"
+#include <astream/InputDevice.hpp>
 
 class GameWorld {
 public:

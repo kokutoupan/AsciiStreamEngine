@@ -61,7 +61,6 @@ elseif(WIN32)
   set(LIBS ws2_32) # 先述のWindows用ソケット
 endif()
 
-include_directories(core/include shaders)
 
 add_subdirectory(core)
 add_subdirectory(client)

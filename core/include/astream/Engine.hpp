@@ -15,10 +15,10 @@
 // =============================================================================
 #if defined(_WIN32) || defined(_WIN64)
 #ifndef WIN32_LEAN_AND_MEAN
-    #define WIN32_LEAN_AND_MEAN // windows.h が古い winsock.h を巻き込むのを防ぐ
+#define WIN32_LEAN_AND_MEAN // windows.h が古い winsock.h を巻き込むのを防ぐ
 #endif
 #ifndef NOMINMAX
-    #define NOMINMAX            // windows.h の max/min マクロが std::max と衝突するのを防ぐ
+#define NOMINMAX // windows.h の max/min マクロが std::max と衝突するのを防ぐ
 #endif
 
 #include <winsock2.h>
@@ -36,8 +36,8 @@
 #include <unistd.h>
 #endif
 
-#include "InputDevice.hpp"
-#include "Texture2D.hpp"
+#include <astream/InputDevice.hpp>
+#include <astream/Texture2D.hpp>
 
 // =============================================================================
 // zlibによる圧縮送信ヘルパー (引数の型キャストをOSに合わせて調整)
@@ -118,7 +118,8 @@ public:
 
     m_serverSock = (int)socket(AF_INET, SOCK_STREAM, 0);
     if (m_serverSock < 0) {
-      std::println(std::cerr, "socket failed: {}", std::generic_category().message(errno));
+      std::println(std::cerr, "socket failed: {}",
+                   std::generic_category().message(errno));
       return false;
     }
 
@@ -138,11 +139,13 @@ public:
     // bind / listen の第2引数のキャスト
     if (bind(m_serverSock, (struct sockaddr *)&server_addr,
              sizeof(server_addr)) < 0) {
-      std::println(std::cerr, "bind failed: {}", std::generic_category().message(errno));
+      std::println(std::cerr, "bind failed: {}",
+                   std::generic_category().message(errno));
       return false;
     }
     if (listen(m_serverSock, 5) < 0) {
-      std::println(std::cerr, "listen failed: {}", std::generic_category().message(errno));
+      std::println(std::cerr, "listen failed: {}",
+                   std::generic_category().message(errno));
       return false;
     }
 
@@ -174,7 +177,8 @@ public:
       int ret = poll(m_pollFds.data(), m_pollFds.size(), 2);
 #endif
       if (ret < 0) {
-        std::println(std::cerr, "poll failed: {}", std::generic_category().message(errno));
+        std::println(std::cerr, "poll failed: {}",
+                     std::generic_category().message(errno));
         break;
       }
 
@@ -216,8 +220,8 @@ public:
             int len = recv(fd, (char *)size_packet, sizeof(size_packet), 0);
             if (len <= 0) {
               close(fd);
-              m_sessions.erase(fd);
-              m_pollFds.erase(m_pollFds.begin() + i);
+              m_pollFds[i] = m_pollFds.back();
+              m_pollFds.pop_back();
               --i;
               continue;
             }
@@ -267,8 +271,8 @@ public:
               // エラーまたは正常切断時のクリーンアップ処理
               session.context->onDisconnect(m_world);
               close(fd);
-              m_sessions.erase(fd);
-              m_pollFds.erase(m_pollFds.begin() + i);
+              m_pollFds[i] = m_pollFds.back();
+              m_pollFds.pop_back();
               --i;
               continue;
             }

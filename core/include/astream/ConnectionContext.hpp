@@ -1,7 +1,7 @@
 #pragma once
 
-#include "InputDevice.hpp"
-#include "Texture2D.hpp"
+#include <astream/InputDevice.hpp>
+#include <astream/Texture2D.hpp>
 
 template <typename WorldType> class ConnectionContext {
 public:

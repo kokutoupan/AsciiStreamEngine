@@ -1,15 +1,15 @@
 #include <algorithm>
+#include <chrono>
 #include <cmath>
 #include <functional>
 #include <iostream>
 #include <limits>
-#include <vector>
 #include <thread>
-#include <chrono>
+#include <vector>
 
-#include "DefaultShaders.hpp"
-#include "GraphicsDevice.hpp"
-#include "Texture2D.hpp"
+#include <astream/GraphicsDevice.hpp>
+#include <astream/Texture2D.hpp>
+#include <astream/shaders/DefaultShaders.hpp>
 #include <glm/glm.hpp>
 #include <glm/gtc/matrix_transform.hpp>
 
@@ -177,7 +177,7 @@ int main() {
 
     angleX += 0.05f;
     angleY += 0.03f;
-	std::this_thread::sleep_for(std::chrono::milliseconds(50));
+    std::this_thread::sleep_for(std::chrono::milliseconds(50));
   }
   return 0;
 }

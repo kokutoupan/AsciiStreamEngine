@@ -9,12 +9,12 @@
 #include <memory>
 #include <vector>
 
-#include "ConnectionContext.hpp"
-#include "DefaultShaders.hpp"
-#include "GameWorld.hpp"
-#include "GraphicsDevice.hpp"
-#include "Texture2D.hpp"
-#include "TextureUtil.hpp"
+#include <astream/ConnectionContext.hpp>
+#include <astream/GameWorld.hpp>
+#include <astream/GraphicsDevice.hpp>
+#include <astream/Texture2D.hpp>
+#include <astream/TextureUtil.hpp>
+#include <astream/shaders/DefaultShaders.hpp>
 #include <glm/glm.hpp>
 #include <glm/gtc/matrix_transform.hpp>
 

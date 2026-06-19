@@ -1,11 +1,13 @@
 #pragma once
 
-#include "Texture2D.hpp"
 #include <algorithm>
 #include <concepts>
-#include <glm/glm.hpp>
 #include <utility>
 #include <vector>
+
+#include <glm/glm.hpp>
+
+#include <astream/Texture2D.hpp>
 
 template <typename T>
 concept IsVarying = requires(T a, T b, float s) {

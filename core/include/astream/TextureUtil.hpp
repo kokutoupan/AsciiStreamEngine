@@ -4,7 +4,7 @@
 #include <string_view>
 #include <vector>
 
-#include "Texture2D.hpp"
+#include <astream/Texture2D.hpp>
 
 namespace TextureUtil {
 
