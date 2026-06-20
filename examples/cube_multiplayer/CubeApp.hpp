@@ -45,7 +45,7 @@ public:
     }
   }
 
-  void globalUpdate() override {
+  void globalUpdate(float delta_time) override {
     // 全入力が処理された後の共通物理やNPC制御などがあればここに記述
   }
 };

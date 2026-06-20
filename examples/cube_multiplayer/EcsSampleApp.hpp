@@ -42,8 +42,8 @@ public:
    * @brief
    * 毎フレーム呼び出され、サイン・コサイン波を用いて座標を円軌道上に更新します。
    */
-  void update(std::size_t index, std::uint32_t entityId,
-              Registry &reg) override {
+  void update(std::size_t index, std::uint32_t entityId, Registry &reg,
+              float dt) override {
     // インデックスによるO(1)アクセスで対象トランスフォームを取得
     auto &trans = reg.get_transform_by_index(index);
 
@@ -75,10 +75,15 @@ private:
   Registry m_registry; ///< ECSのレジストリ実体
 
   // システムが処理対象を識別するためのタグ定義
-  static constexpr std::uint64_t TAG_NORMAL_FLOAT =
-      1; ///< 通常の浮遊オブジェクト用タグ
+  static constexpr std::uint64_t TAG_NORMAL_PHYSICS =
+      1; ///< 通常の物理オブジェクト用タグ
   static constexpr std::uint64_t TAG_SPECIAL_ORBIT =
       2; ///< 特殊な円軌道オブジェクト用タグ
+  static constexpr std::uint64_t TAG_GROUND =
+      3; ///< 【New】床（静的コライダー）識別用タグ
+
+  // 床の高さの基準
+  static constexpr float GROUND_Y = -2.0f;
 
 public:
   EcsGameWorld() {
@@ -87,25 +92,50 @@ public:
     // ---------------------------------------------------------------------
     // システムの登録: 通常キューブの一斉浮遊制御
     // ---------------------------------------------------------------------
-    m_registry.add_system([](Registry &reg) {
-      auto &transforms = reg.get_raw_data<Transform>();
+    m_registry.add_default_systems();
+
+    // 2. 外部重力システム: TAG_NORMAL_PHYSICS のみに重力を適用
+    m_registry.add_system([](Registry &reg, float dt) {
+      auto &velocities = reg.get_raw_data<Velocity>();
+      auto &tags = reg.get_raw_data<std::uint64_t>();
+      glm::vec3 gravity(0.0f, -9.8f, 0.0f);
+
+      for (auto &&[vel, tag] : std::views::zip(velocities, tags)) {
+        if (tag == TAG_NORMAL_PHYSICS) {
+          vel.value += gravity * dt;
+        }
+      }
+    });
+
+    // ---------------------------------------------------------------------
+    // 【接触応答システム】
+    // 標準判定が埋めた hitEntities
+    // から床(TAG_GROUND)との接触を検知してVelocityを反転
+    // ---------------------------------------------------------------------
+    m_registry.add_system([](Registry &reg, float dt) {
+      auto &colliders = reg.get_raw_data<Collider>();
+      auto &velocities = reg.get_raw_data<Velocity>();
       auto &tags = reg.get_raw_data<std::uint64_t>();
 
-      static float time = 0.0f;
-      time += 0.05f;
+      for (std::size_t i = 0; i < colliders.size(); ++i) {
+        // 通常物理オブジェクトであり、かつ何らかのオブジェクトと交差している場合
+        if (tags[i] == TAG_NORMAL_PHYSICS &&
+            !colliders[i].hitEntities.empty()) {
 
-      // タグ判定を行いながら各エンティティのトランスフォームを更新
-      for (std::size_t i = 0; i < transforms.size(); ++i) {
-        if (tags[i] == TAG_NORMAL_FLOAT) {
-          // インデックス値に応じて波の位相と初期高さをずらす
-          float phase = static_cast<float>(i) * 0.5f;
-          float baseY = static_cast<float>((i % 4) - 1) * 2.0f;
+          for (std::uint32_t hitId : colliders[i].hitEntities) {
+            // 衝突相手のタグを安全に確認
+            if (reg.has_component<std::uint64_t>(hitId)) {
+              std::uint64_t hitTag = reg.get_component<std::uint64_t>(hitId);
 
-          transforms[i].position.y = baseY + std::sin(time + phase) * 1.0f;
-
-          // 緩やかな自転
-          transforms[i].rotation.x += 0.01f;
-          transforms[i].rotation.y += 0.02f;
+              glm::vec3 gravity(0.0f, -9.8f, 0.0f);
+              // 相手が「床」であり、自分が現在落下中の場合のみ反発（反発係数1.0）
+              if (hitTag == TAG_GROUND && velocities[i].value.y < 0.0f) {
+                velocities[i].value.y =
+                    std::abs(velocities[i].value.y) * 1.0f + gravity.y * dt;
+                break; // 床との衝突処理が確定したらこのオブジェクトのチェックを抜ける
+              }
+            }
+          }
         }
       }
     });
@@ -147,17 +177,37 @@ public:
     // エンティティの生成
     // ---------------------------------------------------------------------
 
-    // 1. システム駆動される通常キューブを30個生成 (スクリプト動作は無し)
+    Transform planeTrans{.position = glm::vec3(0.0f, GROUND_Y, -7.5f)};
+    Velocity planeVel{};
+    VertexComponent planeVertexComp{
+        .asset = nullptr}; // 描画はセッション側で静的におこなうためnullptrでOK
+    Collider planeCollider{
+        .centerOffset = glm::vec3(0.0f),
+        .halfExtents = glm::vec3(
+            15.0f, 0.1f, 17.5f) // 幅30, 厚み0.2, 奥行き35 の巨大な壁を床化
+    };
+    // 床として世界に固定配置
+    m_registry.create_entity(planeTrans, planeVel, planeVertexComp, TAG_GROUND,
+                             nullptr, planeCollider);
+
+    // 1. システム駆動される通常キューブを30個生成 (Scriptはnullptr,
+    // コライダーを付与)
     for (int i = 0; i < 30; ++i) {
       float x = static_cast<float>((i % 6) - 3) * 3.0f;
       float z = static_cast<float>((i / 6) - 2) * -4.0f;
+      float initialY = 4.0f + static_cast<float>(i % 3) *
+                                  2.0f; // 初期高度を散らしてカオス感を出す
 
-      Transform trans{.position = glm::vec3(x, 0.0f, z),
+      Transform trans{.position = glm::vec3(x, initialY, z),
                       .rotation = glm::vec3(0.0f),
                       .scale = glm::vec3(0.5f)};
 
+      // スケール0.5fに合わせたAABBハーフサイズ
+      Collider cubeCollider{.centerOffset = glm::vec3(0.0f),
+                            .halfExtents = glm::vec3(0.5f)};
+
       m_registry.create_entity(trans, Velocity{}, cubeVertexComp,
-                               TAG_NORMAL_FLOAT, nullptr);
+                               TAG_NORMAL_PHYSICS, nullptr, cubeCollider);
     }
 
     // 2. スクリプト駆動されるボス級ボスモデルを1個生成
@@ -179,7 +229,9 @@ public:
    * @brief
    * ワールドの更新処理。登録されたスクリプトおよびシステムを一括アップデートします。
    */
-  void globalUpdate() override { m_registry.update(); }
+  void globalUpdate(float delta_time) override {
+    m_registry.update(delta_time);
+  }
 
   /**
    * @brief ECSレジストリへの定数参照を取得します。
@@ -349,6 +401,8 @@ public:
         std::bind_back(Shaders::shadowVS, identityModel, lightSpaceMatrix));
 
     for (auto &&[trans, vComp] : std::views::zip(transforms, vertexComps)) {
+      if (!vComp.asset)
+        continue;
       const auto &mesh = vComp.cast<Shaders::DefaultVertex>();
       shadowPass.draw(mesh.vertices, mesh.indices,
                       std::bind_back(Shaders::shadowVS, trans.to_matrix(),
@@ -370,6 +424,8 @@ public:
 
     for (auto &&[trans, vComp] : std::views::zip(transforms, vertexComps)) {
       const auto &mesh = vComp.cast<Shaders::DefaultVertex>();
+      if (!vComp.asset)
+        continue;
       glm::mat4 model = trans.to_matrix();
       glm::mat4 mvp = proj * view * model;
 

@@ -291,7 +291,7 @@ public:
       }
 
       // 3-B. サーバー側のグローバル更新
-      m_world.globalUpdate();
+      m_world.globalUpdate(deltaTime);
 
       // 3-C. 各プレイヤー視点での独立描画・コピー・最速送信
       for (auto &[fd, session] : m_sessions) {

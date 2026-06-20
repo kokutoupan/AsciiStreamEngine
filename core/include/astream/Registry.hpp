@@ -4,6 +4,7 @@
 #include <cstdint>
 #include <functional>
 #include <memory>
+#include <ranges>
 #include <stdexcept>
 #include <typeindex>
 #include <unordered_map>
@@ -75,7 +76,7 @@ public:
 /**
  * @brief ゲーム側やAIが定義した具体的な頂点型 (InputVertex)
  * を保持するメッシュアセットの具象クラス。
- * @tparam InputVertex ユーザー定義 of 頂点構造体
+ * @tparam InputVertex ユーザー定義の頂点構造体
  */
 template <typename InputVertex> struct MeshAsset : public IBufferAsset {
   std::vector<InputVertex> vertices; ///< 頂点データ配列
@@ -116,9 +117,10 @@ public:
    * @param index プール内でのインデックス
    * @param entityId 対象のエンティティID
    * @param reg 呼び出し元のレジストリ実体
+   * @param dt 前フレームからの経過時間 (デルタタイム)
    */
-  virtual void update(std::size_t index, std::uint32_t entityId,
-                      Registry &reg) = 0;
+  virtual void update(std::size_t index, std::uint32_t entityId, Registry &reg,
+                      float dt) = 0;
 };
 
 /**
@@ -127,6 +129,18 @@ public:
 struct ScriptComponent {
   std::unique_ptr<EntityBehavior> behavior =
       nullptr; ///< 振る舞いを定義するオブジェクトへの所有ポインタ
+};
+
+/**
+ * @brief 衝突判定を行うためのAABB (Axis-Aligned Bounding Box) コライダー。
+ */
+struct Collider {
+  glm::vec3 centerOffset{0.0f}; ///< 親トランスフォームの位置からのオフセット
+  glm::vec3 halfExtents{
+      0.0f}; ///< AABBの各軸の半幅サイズ (幅/2, 高さ/2, 奥行き/2)
+
+  std::vector<std::uint32_t>
+      hitEntities; ///< このフレームで接触した他エンティティのIDリスト
 };
 
 // =============================================================================
@@ -282,7 +296,7 @@ private:
 
   // C++23 の std::move_only_function
   // を使用し、コピー不可なキャプチャ付きラムダも高速かつ安全に保持します
-  std::vector<std::move_only_function<void(Registry &)>>
+  std::vector<std::move_only_function<void(Registry &, float dt)>>
       systems; ///< 登録されたシステム関数のリスト
 
   std::uint32_t next_entity_id = 0;    ///< 次に割り当てる新規エンティティID
@@ -341,27 +355,31 @@ public:
   }
 
   /**
-   * @brief 基本コンポーネント群を一括して紐付けたエンティティを生成します。
+   * @brief
+   * 基本コンポーネント群およびコライダーを紐付けたエンティティを一括生成します。
    *
    * @param transform 初期トランスフォーム
    * @param velocity 初期速度
    * @param vertex 頂点アセット情報
    * @param tag ユーザー定義のタグ値 (デフォルトは 0)
    * @param behavior エンティティの動的動作 (デフォルトは nullptr)
+   * @param collider コライダー設定 (デフォルトは空コライダー)
    * @return std::uint32_t 生成されたエンティティID
    */
   std::uint32_t
   create_entity(Transform transform, Velocity velocity, VertexComponent vertex,
                 std::uint64_t tag = 0,
-                std::unique_ptr<EntityBehavior> behavior = nullptr) {
+                std::unique_ptr<EntityBehavior> behavior = nullptr,
+                Collider collider = Collider{}) {
     std::uint32_t id = generate_raw_id();
 
-    // 基本保証コンポーネントを一括して紐付け
+    // 各コンポーネントを一括して割り当て
     add_component<Transform>(id, std::move(transform));
     add_component<Velocity>(id, std::move(velocity));
     add_component<VertexComponent>(id, std::move(vertex));
     add_component<std::uint64_t>(id, tag);
     add_component<ScriptComponent>(id, ScriptComponent{std::move(behavior)});
+    add_component<Collider>(id, std::move(collider));
 
     return id;
   }
@@ -540,7 +558,7 @@ public:
   }
 
   /**
-   * @brief プール内の密配列のインデックスから、タグを値渡しで取得します。
+   * @brief プール内の密配列 of インデックスから、タグを値渡しで取得します。
    * @param index プール内のインデックス
    * @return std::uint64_t タグの値
    */
@@ -568,26 +586,112 @@ public:
   }
 
   /**
+   * @brief プール内の密配列のインデックスから、Collider
+   * コンポーネントを取得します。
+   * @param index プール内のインデックス
+   * @return Collider& Colliderコンポーネントへの参照
+   */
+  Collider &get_collider_by_index(std::size_t index) {
+    return get_raw_data<Collider>()[index];
+  }
+
+  /**
+   * @brief プール内の密配列のインデックスから、Collider
+   * コンポーネントを定数参照で取得します。
+   * @param index プール内のインデックス
+   * @return const Collider& Colliderコンポーネントへの定数参照
+   */
+  const Collider &get_collider_by_index(std::size_t index) const {
+    return get_raw_data<Collider>()[index];
+  }
+
+  /**
+   * @brief 物理移動 (Inertia Movement) と衝突判定 (AABB Collision)
+   * などのデフォルトシステムを追加します。
+   */
+  void add_default_systems() {
+    // 1. 物理移動システム
+    add_system([](Registry &reg, float dt) {
+      auto &transforms = reg.get_raw_data<Transform>();
+      auto &velocities = reg.get_raw_data<Velocity>();
+
+      for (auto &&[trans, vel] : std::views::zip(transforms, velocities)) {
+        trans.position += vel.value * dt;
+      }
+    });
+
+    // 2. AABB衝突判定システム (O(N^2) 総当たりチェック)
+    add_system([](Registry &reg, float /*dt*/) {
+      auto &transforms = reg.get_raw_data<Transform>();
+      auto &colliders = reg.get_raw_data<Collider>();
+      auto &entities = reg.get_raw_entities<Collider>();
+
+      std::size_t count = transforms.size();
+
+      // 各フレームの開始時に衝突リストをリセット
+      for (auto &col : colliders) {
+        col.hitEntities.clear();
+      }
+
+      for (std::size_t i = 0; i < count; ++i) {
+        if (colliders[i].halfExtents.x <= 0.0f ||
+            colliders[i].halfExtents.y <= 0.0f ||
+            colliders[i].halfExtents.z <= 0.0f) {
+          continue;
+        }
+
+        glm::vec3 centerA = transforms[i].position + colliders[i].centerOffset;
+        glm::vec3 minA = centerA - colliders[i].halfExtents;
+        glm::vec3 maxA = centerA + colliders[i].halfExtents;
+
+        for (std::size_t j = i + 1; j < count; ++j) {
+          if (colliders[j].halfExtents.x <= 0.0f ||
+              colliders[j].halfExtents.y <= 0.0f ||
+              colliders[j].halfExtents.z <= 0.0f) {
+            continue;
+          }
+
+          glm::vec3 centerB =
+              transforms[j].position + colliders[j].centerOffset;
+          glm::vec3 minB = centerB - colliders[j].halfExtents;
+          glm::vec3 maxB = centerB + colliders[j].halfExtents;
+
+          // AABB交差判定 (すべての軸で重なりがあるか)
+          bool overlapX = (minA.x <= maxB.x) && (maxA.x >= minB.x);
+          bool overlapY = (minA.y <= maxB.y) && (maxA.y >= minB.y);
+          bool overlapZ = (minA.z <= maxB.z) && (maxA.z >= minB.z);
+
+          if (overlapX && overlapY && overlapZ) {
+            colliders[i].hitEntities.push_back(entities[j]);
+            colliders[j].hitEntities.push_back(entities[i]);
+          }
+        }
+      }
+    });
+  }
+
+  /**
    * @brief 毎フレーム呼び出されるメイン更新ループ。
    *
    * 全ての ScriptComponent に登録された EntityBehavior の update を実行した後、
    * 登録された全システム関数を実行します。
+   *
+   * @param dt 前フレームからの経過時間 (デルタタイム)
    */
-  void update() {
+  void update(float dt) {
     auto &scripts = get_raw_data<ScriptComponent>();
     auto &entities = get_raw_entities<ScriptComponent>();
 
-    // 1. 各エンティティのスクリプト挙動を更新
+    // 1. 各エンティティに登録されたスクリプトの更新処理を実行
     for (std::size_t i = 0; i < scripts.size(); ++i) {
       if (scripts[i].behavior) {
-        // インデックス、エンティティID、レジストリ自身を渡して挙動を実行
-        scripts[i].behavior->update(i, entities[i], *this);
+        scripts[i].behavior->update(i, entities[i], *this, dt);
       }
     }
 
-    // 2. 登録されたシステム（ラムダ関数等）を実行
+    // 2. 登録された全システム関数の実行
     for (auto &system : systems) {
-      system(*this);
+      system(*this, dt);
     }
   }
 };
