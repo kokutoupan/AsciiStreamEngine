@@ -23,3 +23,6 @@ build/
 
 out/
 .vs
+
+# profile_data
+server_profile.log
