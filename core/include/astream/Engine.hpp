@@ -1,6 +1,7 @@
 #pragma once
 #include <algorithm>
 #include <chrono>
+#include <execution>
 #include <iostream>
 #include <memory>
 #include <print>
@@ -36,6 +37,7 @@
 #include <unistd.h>
 #endif
 
+#include <astream/Debug.hpp>
 #include <astream/InputDevice.hpp>
 #include <astream/Texture2D.hpp>
 
@@ -181,7 +183,7 @@ public:
                      std::generic_category().message(errno));
         break;
       }
-
+      Debug::LoopProfiler main_loop("Server Full Loop");
       // 1. 新規接続処理
       if (m_pollFds[0].revents & POLLIN) {
         struct sockaddr_in client_addr;
@@ -291,30 +293,53 @@ public:
       }
 
       // 3-B. サーバー側のグローバル更新
-      m_world.globalUpdate();
+      m_world.globalUpdate(deltaTime);
 
       // 3-C. 各プレイヤー視点での独立描画・コピー・最速送信
+
+      std::vector<ClientSession *> active_sessions;
+      active_sessions.reserve(m_sessions.size());
+
       for (auto &[fd, session] : m_sessions) {
-        if (!session.size_initialized)
-          continue;
-
-        session.context->render(*session.colorBuffer, m_world);
-
-        size_t streamIdx = 3;
-        int w = session.width;
-        int h = session.height;
-        for (int y = 0; y < h; ++y) {
-          const char *src_row = session.colorBuffer->getData() + (y * w);
-          char *dst_row = session.outputBuffer.data() + streamIdx;
-          std::copy_n(src_row, w, dst_row);
-          streamIdx += (w + 1);
+        if (session.size_initialized) {
+          active_sessions.push_back(&session);
         }
-
-        send_engine_frame_compressed(fd, session.outputBuffer.data(),
-                                     session.outputBuffer.size());
-
-        session.input.nextFrame();
       }
+      // 2. 集めたセッションに対して、並列実行
+      const auto &const_world = m_world;
+
+      std::for_each(
+          std::execution::par, active_sessions.begin(), active_sessions.end(),
+          [&const_world](ClientSession *session_ptr) {
+            auto &session = *session_ptr;
+
+            // [A] 各プレイヤー視点での描画（const world を渡す）
+            session.context->render(*session.colorBuffer, const_world);
+
+            // [B] カラーバッファから送信バッファへのコピー
+            size_t streamIdx = 3;
+            int w = session.width;
+            int h = session.height;
+            for (int y = 0; y < h; ++y) {
+              const char *src_row = session.colorBuffer->getData() + (y * w);
+              char *dst_row = session.outputBuffer.data() + streamIdx;
+              std::copy_n(src_row, w, dst_row);
+              streamIdx += (w + 1);
+            }
+
+            // [C]
+            // 圧縮と送信（スレッドごとに個別に実行されるため、重いcompressが並列化される）
+            send_engine_frame_compressed(session.fd,
+                                         session.outputBuffer.data(),
+                                         session.outputBuffer.size());
+          });
+
+      // 3. 次フレームへの入力状態の遷移は、メインスレッドに戻って安全に一括処理
+      for (auto *session_ptr : active_sessions) {
+        session_ptr->input.nextFrame();
+      }
+
+      main_loop.stop();
 
       auto frameEnd = std::chrono::steady_clock::now();
       double activeTimeMs =

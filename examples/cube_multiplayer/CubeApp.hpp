@@ -45,7 +45,7 @@ public:
     }
   }
 
-  void globalUpdate() override {
+  void globalUpdate(float delta_time) override {
     // 全入力が処理された後の共通物理やNPC制御などがあればここに記述
   }
 };
@@ -163,7 +163,7 @@ public:
         w, h, std::numeric_limits<float>::max());
     shadowDepth = std::make_unique<Texture2D<float>>(
         sw, sh, std::numeric_limits<float>::max());
-    albedoBuffer = std::make_unique<Texture2D<char>>(w, h, ' ');
+    albedoBuffer = std::make_unique<Texture2D<char>>(w, h, 0);
     normalBuffer =
         std::make_unique<Texture2D<glm::vec3>>(w, h, glm::vec3(0, 0, 0));
     worldPosBuffer =
@@ -229,7 +229,7 @@ public:
     outputTexture.clear(' ');
     cameraDepth->clear(std::numeric_limits<float>::max());
     shadowDepth->clear(std::numeric_limits<float>::max());
-    albedoBuffer->clear(' ');
+    albedoBuffer->clear(0);
     normalBuffer->clear(glm::vec3(0, 0, 0));
     worldPosBuffer->clear(glm::vec3(0, 0, 0));
 
@@ -291,7 +291,7 @@ public:
         planeVertices, planeIndices,
         std::bind_back(Shaders::geometryVS, currentModel, currentMVP),
         [&](int x, int y, const Shaders::DefaultVarying &in) {
-          albedoBuffer->at(x, y) = 'F';
+          albedoBuffer->at(x, y) = 100;
           normalBuffer->at(x, y) = in.normal;
           worldPosBuffer->at(x, y) = in.worldPos;
         });
@@ -307,7 +307,7 @@ public:
         cubeVertices, cubeIndices,
         std::bind_back(Shaders::geometryVS, currentModel, currentMVP),
         [&](int x, int y, const Shaders::DefaultVarying &in) {
-          albedoBuffer->at(x, y) = 'C';
+          albedoBuffer->at(x, y) = 80;
           normalBuffer->at(x, y) = in.normal;
           worldPosBuffer->at(x, y) = in.worldPos;
         });

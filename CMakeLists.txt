@@ -4,6 +4,7 @@ project(AsciiStreamEngine)
 set(CMAKE_EXPORT_COMPILE_COMMANDS ON)
 set(CMAKE_CXX_STANDARD 23)
 set(CMAKE_CXX_STANDARD_REQUIRED True)
+set(CMAKE_CXX_SCAN_FOR_MODULES OFF)
 
 if(MSVC)
   # ソースコードの読み込み(source-set)も実行時(execution-set)もすべてUTF-8として処理させる

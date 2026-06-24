@@ -9,5 +9,5 @@ public:
   virtual void processPlayerInput(int clientId, const InputDevice &input) = 0;
 
   // 全プレイヤーの入力処理が完了した後に実行される世界共通の更新ロジック
-  virtual void globalUpdate() = 0;
+  virtual void globalUpdate(float delta_time) = 0;
 };
