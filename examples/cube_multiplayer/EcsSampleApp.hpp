@@ -96,13 +96,13 @@ public:
 
     // 2. 外部重力システム: TAG_NORMAL_PHYSICS のみに重力を適用
     m_registry.add_system([](Registry &reg, float dt) {
-      auto &velocities = reg.get_raw_data<Velocity>();
       auto &tags = reg.get_raw_data<std::uint64_t>();
+      auto &accelerations = reg.get_raw_data<Acceleration>();
       glm::vec3 gravity(0.0f, -9.8f, 0.0f);
 
-      for (auto &&[vel, tag] : std::views::zip(velocities, tags)) {
+      for (auto &&[tag, accel] : std::views::zip(tags, accelerations)) {
         if (tag == TAG_NORMAL_PHYSICS) {
-          vel.value += gravity * dt;
+          accel.value = gravity;
         }
       }
     });
@@ -116,6 +116,7 @@ public:
       auto &colliders = reg.get_raw_data<Collider>();
       auto &velocities = reg.get_raw_data<Velocity>();
       auto &tags = reg.get_raw_data<std::uint64_t>();
+      auto &accelerations = reg.get_raw_data<Acceleration>();
 
       for (std::size_t i = 0; i < colliders.size(); ++i) {
         // 通常物理オブジェクトであり、かつ何らかのオブジェクトと交差している場合
@@ -127,11 +128,10 @@ public:
             if (reg.has_component<std::uint64_t>(hitId)) {
               std::uint64_t hitTag = reg.get_component<std::uint64_t>(hitId);
 
-              glm::vec3 gravity(0.0f, -9.8f, 0.0f);
               // 相手が「床」であり、自分が現在落下中の場合のみ反発（反発係数1.0）
               if (hitTag == TAG_GROUND && velocities[i].value.y < 0.0f) {
-                velocities[i].value.y =
-                    std::abs(velocities[i].value.y) * 1.0f + gravity.y * dt;
+                accelerations[i].value = glm::vec3(0.0f);
+                velocities[i].value.y = std::abs(velocities[i].value.y) * 1.0f;
                 break; // 床との衝突処理が確定したらこのオブジェクトのチェックを抜ける
               }
             }
@@ -187,8 +187,9 @@ public:
             15.0f, 0.1f, 17.5f) // 幅30, 厚み0.2, 奥行き35 の巨大な壁を床化
     };
     // 床として世界に固定配置
-    m_registry.create_entity(planeTrans, planeVel, planeVertexComp, TAG_GROUND,
-                             nullptr, planeCollider);
+    m_registry.create_entity(planeTrans, planeVel, Acceleration{},
+                             planeVertexComp, TAG_GROUND, nullptr,
+                             planeCollider);
 
     // 1. システム駆動される通常キューブを30個生成 (Scriptはnullptr,
     // コライダーを付与)
@@ -206,8 +207,9 @@ public:
       Collider cubeCollider{.centerOffset = glm::vec3(0.0f),
                             .halfExtents = glm::vec3(0.5f)};
 
-      m_registry.create_entity(trans, Velocity{}, cubeVertexComp,
-                               TAG_NORMAL_PHYSICS, nullptr, cubeCollider);
+      m_registry.create_entity(trans, Velocity{}, Acceleration{},
+                               cubeVertexComp, TAG_NORMAL_PHYSICS, nullptr,
+                               cubeCollider);
     }
 
     // 2. スクリプト駆動されるボス級ボスモデルを1個生成
@@ -219,8 +221,9 @@ public:
     auto orbitBehavior = std::make_unique<OrbitBehavior>(
         glm::vec3(0.0f, 3.0f, -5.0f), 6.0f, 1.0f);
 
-    m_registry.create_entity(specialTrans, Velocity{}, cubeVertexComp,
-                             TAG_SPECIAL_ORBIT, std::move(orbitBehavior));
+    m_registry.create_entity(specialTrans, Velocity{}, Acceleration{},
+                             cubeVertexComp, TAG_SPECIAL_ORBIT,
+                             std::move(orbitBehavior));
   }
 
   void processPlayerInput(int clientId, const InputDevice &input) override {}

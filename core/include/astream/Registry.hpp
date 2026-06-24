@@ -65,6 +65,13 @@ struct Velocity {
 };
 
 /**
+ * @brief エンティティの加速度を表すコンポーネント。
+ */
+struct Acceleration {
+  glm::vec3 value{0.0f}; ///< 加速度ベクトル
+};
+
+/**
  * @brief
  * ユーザー定義の頂点バッファアセットを型消去して一律に扱うための基底インターフェース。
  */
@@ -297,7 +304,11 @@ private:
   // C++23 の std::move_only_function
   // を使用し、コピー不可なキャプチャ付きラムダも高速かつ安全に保持します
   std::vector<std::move_only_function<void(Registry &, float dt)>>
-      systems; ///< 登録されたシステム関数のリスト
+      pre_systems; ///< 登録された前処理システム関数のリスト
+  std::vector<std::move_only_function<void(Registry &, float dt)>>
+      systems; ///< 登録されたメインシステム関数のリスト
+  std::vector<std::move_only_function<void(Registry &, float dt)>>
+      post_systems; ///< 登録された後処理システム関数のリスト
 
   std::uint32_t next_entity_id = 0;    ///< 次に割り当てる新規エンティティID
   std::vector<std::uint32_t> free_ids; ///< 再利用可能な解放済みエンティティID
@@ -360,6 +371,7 @@ public:
    *
    * @param transform 初期トランスフォーム
    * @param velocity 初期速度
+   * @param acceleration 初期加速度
    * @param vertex 頂点アセット情報
    * @param tag ユーザー定義のタグ値 (デフォルトは 0)
    * @param behavior エンティティの動的動作 (デフォルトは nullptr)
@@ -367,7 +379,8 @@ public:
    * @return std::uint32_t 生成されたエンティティID
    */
   std::uint32_t
-  create_entity(Transform transform, Velocity velocity, VertexComponent vertex,
+  create_entity(Transform transform, Velocity velocity,
+                Acceleration acceleration = {}, VertexComponent vertex = {},
                 std::uint64_t tag = 0,
                 std::unique_ptr<EntityBehavior> behavior = nullptr,
                 Collider collider = Collider{}) {
@@ -376,6 +389,7 @@ public:
     // 各コンポーネントを一括して割り当て
     add_component<Transform>(id, std::move(transform));
     add_component<Velocity>(id, std::move(velocity));
+    add_component<Acceleration>(id, std::move(acceleration));
     add_component<VertexComponent>(id, std::move(vertex));
     add_component<std::uint64_t>(id, tag);
     add_component<ScriptComponent>(id, ScriptComponent{std::move(behavior)});
@@ -461,6 +475,26 @@ public:
   }
 
   /**
+   * @brief 更新時に実行されるカスタム前処理システム関数を登録します。
+   * @tparam Func コールバック関数の型
+   * @param system_func 登録するシステム関数 (Registry &
+   * を引数に取る関数オブジェクト)
+   */
+  template <typename Func> void add_pre_system(Func &&system_func) {
+    pre_systems.emplace_back(std::forward<Func>(system_func));
+  }
+
+  /**
+   * @brief 更新時に実行されるカスタム後処理システム関数を登録します。
+   * @tparam Func コールバック関数の型
+   * @param system_func 登録するシステム関数 (Registry &
+   * を引数に取る関数オブジェクト)
+   */
+  template <typename Func> void add_post_system(Func &&system_func) {
+    post_systems.emplace_back(std::forward<Func>(system_func));
+  }
+
+  /**
    * @brief 指定したコンポーネント型の内部密配列 (連続バッファ) を取得します。
    * @tparam T コンポーネントの型
    * @return auto& コンポーネント配列への参照
@@ -527,6 +561,26 @@ public:
    */
   const Velocity &get_velocity_by_index(std::size_t index) const {
     return get_raw_data<Velocity>()[index];
+  }
+
+  /**
+   * @brief プール内の密配列のインデックスから、Acceleration
+   * コンポーネントを取得します。
+   * @param index プール内のインデックス
+   * @return Acceleration& Accelerationコンポーネントへの参照
+   */
+  Acceleration &get_acceleration_by_index(std::size_t index) {
+    return get_raw_data<Acceleration>()[index];
+  }
+
+  /**
+   * @brief プール内の密配列のインデックスから、Acceleration
+   * コンポーネントを定数参照で取得します。
+   * @param index プール内のインデックス
+   * @return const Acceleration& Accelerationコンポーネントへの定数参照
+   */
+  const Acceleration &get_acceleration_by_index(std::size_t index) const {
+    return get_raw_data<Acceleration>()[index];
   }
 
   /**
@@ -614,14 +668,17 @@ public:
     add_system([](Registry &reg, float dt) {
       auto &transforms = reg.get_raw_data<Transform>();
       auto &velocities = reg.get_raw_data<Velocity>();
+      auto &accelerations = reg.get_raw_data<Acceleration>();
 
-      for (auto &&[trans, vel] : std::views::zip(transforms, velocities)) {
+      for (auto &&[trans, vel, accel] :
+           std::views::zip(transforms, velocities, accelerations)) {
+        vel.value += accel.value * dt;
         trans.position += vel.value * dt;
       }
     });
 
     // 2. AABB衝突判定システム (O(N^2) 総当たりチェック)
-    add_system([](Registry &reg, float /*dt*/) {
+    add_post_system([](Registry &reg, float /*dt*/) {
       auto &transforms = reg.get_raw_data<Transform>();
       auto &colliders = reg.get_raw_data<Collider>();
       auto &entities = reg.get_raw_entities<Collider>();
@@ -673,24 +730,35 @@ public:
   /**
    * @brief 毎フレーム呼び出されるメイン更新ループ。
    *
-   * 全ての ScriptComponent に登録された EntityBehavior の update を実行した後、
-   * 登録された全システム関数を実行します。
+   * 登録された前処理システム関数を実行し、
+   * 全ての ScriptComponent に登録された EntityBehavior の update を実行し、
+   * 登録された全システム関数を実行した後、後処理システム関数を実行します。
    *
    * @param dt 前フレームからの経過時間 (デルタタイム)
    */
   void update(float dt) {
+    // 1. 登録された前処理システムの実行
+    for (auto &system : pre_systems) {
+      system(*this, dt);
+    }
+
     auto &scripts = get_raw_data<ScriptComponent>();
     auto &entities = get_raw_entities<ScriptComponent>();
 
-    // 1. 各エンティティに登録されたスクリプトの更新処理を実行
+    // 2. 各エンティティに登録されたスクリプトの更新処理を実行
     for (std::size_t i = 0; i < scripts.size(); ++i) {
       if (scripts[i].behavior) {
         scripts[i].behavior->update(i, entities[i], *this, dt);
       }
     }
 
-    // 2. 登録された全システム関数の実行
+    // 3. 登録された全システム関数の実行
     for (auto &system : systems) {
+      system(*this, dt);
+    }
+
+    // 4. 登録された後処理システムの実行
+    for (auto &system : post_systems) {
       system(*this, dt);
     }
   }
