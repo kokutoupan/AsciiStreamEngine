@@ -4,6 +4,9 @@
 #include <iostream>
 #include <print>
 #include <string_view>
+#include <random>
+#include <format>
+#include <string>
 
 // =============================================================================
 // OS固有のヘッダー定義とシステムコール/ネイティブAPIのマッピング
@@ -18,7 +21,10 @@
 // Windows用のグローバル状態
 DWORD orig_console_mode;
 HANDLE hStdin, hStdout;
+// クライアント固有のウィンドウタイトルを保持する変数
+std::string g_unique_title;
 #else
+// Linux
 #include <netdb.h>
 #include <netinet/in.h>
 #include <poll.h>
@@ -42,6 +48,19 @@ struct termios orig_termios;
 #if defined(_WIN32)
 // Windows用のキーマッピングと送信処理
 void scan_and_send_keys(SOCKET fd) {
+    HWND hFg = GetForegroundWindow();
+    if (hFg == NULL) return;
+
+    if (hFg != GetConsoleWindow()) {
+        // Windows ターミナル環境のタブ判定
+        char title[512] = {0};
+        GetWindowTextA(hFg, title, sizeof(title));
+
+        if (!std::string_view(title).contains(g_unique_title)) {
+          return;
+        }
+    }
+
     // 1. Shiftキーの押下状態を取得（大文字・小文字、および記号の判定用）
     bool is_shift = (GetAsyncKeyState(VK_SHIFT) & 0x8000) != 0;
 
@@ -207,6 +226,18 @@ int recv_exact(int fd, void* buf, size_t len) {
 // メイン関数
 // =============================================================================
 int main(int argc, char* argv[]) {
+#if defined(_WIN32)
+    // 1. ハードウェア由来のシードを使ってメルセンヌ・ツイスタ乱数生成器を初期化
+    std::random_device rd;
+    std::mt19937 gen(rd());
+    // 2. 32ビット整数の範囲でランダムな値を生成
+    std::uniform_int_distribution<uint32_t> dis;
+
+    g_unique_title = std::format("AsciiStreamEngine_Client_{:08X}", dis(gen));
+
+    SetConsoleTitleA(g_unique_title.c_str());
+#endif
+
     const char* port = HOST_PORT;
     const char* host = HOST_DOMAIN;
 
