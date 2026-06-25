@@ -13,6 +13,7 @@
 #include <astream/ConnectionContext.hpp>
 #include <astream/GameWorld.hpp>
 #include <astream/GraphicsDevice.hpp>
+#include <astream/MeshUtil.hpp>
 #include <astream/Registry.hpp>
 #include <astream/Texture2D.hpp>
 #include <astream/TextureUtil.hpp>
@@ -20,6 +21,8 @@
 
 #include <glm/glm.hpp>
 #include <glm/gtc/matrix_transform.hpp>
+
+#include "cube_data.hpp"
 
 // =============================================================================
 // 1. 特殊な動き (床と平行な円軌道) を担当する AI (EntityBehavior)
@@ -144,33 +147,11 @@ public:
     // アセット準備: 立方体メッシュデータの作成
     // ---------------------------------------------------------------------
     auto cubeMesh = std::make_shared<MeshAsset<Shaders::DefaultVertex>>();
-    cubeMesh->vertices = {{{1, -1, -1}, {0, 0, -1}, {0.0f, 1.0f}},
-                          {{-1, -1, -1}, {0, 0, -1}, {1.0f, 1.0f}},
-                          {{-1, 1, -1}, {0, 0, -1}, {1.0f, 0.0f}},
-                          {{1, 1, -1}, {0, 0, -1}, {0.0f, 0.0f}},
-                          {{-1, -1, 1}, {0, 0, 1}, {0.0f, 1.0f}},
-                          {{1, -1, 1}, {0, 0, 1}, {1.0f, 1.0f}},
-                          {{1, 1, 1}, {0, 0, 1}, {1.0f, 0.0f}},
-                          {{-1, 1, 1}, {0, 0, 1}, {0.0f, 0.0f}},
-                          {{-1, -1, -1}, {-1, 0, 0}, {0.0f, 1.0f}},
-                          {{-1, -1, 1}, {-1, 0, 0}, {1.0f, 1.0f}},
-                          {{-1, 1, 1}, {-1, 0, 0}, {1.0f, 0.0f}},
-                          {{-1, 1, -1}, {-1, 0, 0}, {0.0f, 0.0f}},
-                          {{1, -1, 1}, {1, 0, 0}, {0.0f, 1.0f}},
-                          {{1, -1, -1}, {1, 0, 0}, {1.0f, 1.0f}},
-                          {{1, 1, -1}, {1, 0, 0}, {1.0f, 0.0f}},
-                          {{1, 1, 1}, {1, 0, 0}, {0.0f, 0.0f}},
-                          {{-1, 1, 1}, {0, 1, 0}, {0.0f, 1.0f}},
-                          {{1, 1, 1}, {0, 1, 0}, {1.0f, 1.0f}},
-                          {{1, 1, -1}, {0, 1, 0}, {1.0f, 0.0f}},
-                          {{-1, 1, -1}, {0, 1, 0}, {0.0f, 0.0f}},
-                          {{-1, -1, -1}, {0, -1, 0}, {0.0f, 1.0f}},
-                          {{1, -1, -1}, {0, -1, 0}, {1.0f, 1.0f}},
-                          {{1, -1, 1}, {0, -1, 0}, {1.0f, 0.0f}},
-                          {{-1, -1, 1}, {0, -1, 0}, {0.0f, 0.0f}}};
-    cubeMesh->indices = {0,  1,  2,  0,  2,  3,  4,  5,  6,  4,  6,  7,
-                         8,  9,  10, 8,  10, 11, 12, 13, 14, 12, 14, 15,
-                         16, 17, 18, 16, 18, 19, 20, 21, 22, 20, 22, 23};
+    cubeMesh->vertices = MeshUtil::create_vertices(
+        cube_vertex_count, cube_positions, cube_normals, cube_texcoords);
+    ;
+    cubeMesh->indices =
+        MeshUtil::create_indices(cube_index_count, cube_indices);
     VertexComponent cubeVertexComp{.asset = cubeMesh};
 
     // ---------------------------------------------------------------------
