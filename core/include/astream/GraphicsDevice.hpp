@@ -2,8 +2,9 @@
 
 #include <algorithm>
 #include <concepts>
+#include <memory_resource>
+#include <span>
 #include <utility>
-#include <vector>
 
 #include <glm/glm.hpp>
 
@@ -58,8 +59,8 @@ public:
     template <typename VertexShader, typename FragmentShader>
       requires IsVertexShader<VertexShader, InputVertex, Varying> &&
                IsFragmentShader<FragmentShader, Varying>
-    void draw(const std::vector<InputVertex> &vertices,
-              const std::vector<int> &indices, VertexShader &&vertexShader,
+    void draw(std::span<const InputVertex> vertices,
+              std::span<const int> indices, VertexShader &&vertexShader,
               FragmentShader &&fragmentShader) {
 
       int targetWidth = m_depthBuffer.getWidth();
@@ -72,8 +73,13 @@ public:
         Varying var;
       };
 
-      std::vector<VSOutput> vsOutputs;
+      // 256KBのスタックを確保
+      alignas(VSOutput) std::byte buffer[256 * 1024];
+      std::pmr::monotonic_buffer_resource mem_pool(buffer, sizeof(buffer));
+      std::pmr::vector<VSOutput> vsOutputs(&mem_pool);
+
       vsOutputs.reserve(vertices.size());
+
       for (const auto &v : vertices) {
         auto result = vertexShader(v);
         vsOutputs.push_back({result.first, result.second});
@@ -221,8 +227,8 @@ public:
 
     template <typename VertexShader>
       requires IsVertexShader<VertexShader, InputVertex, Varying>
-    void draw(const std::vector<InputVertex> &vertices,
-              const std::vector<int> &indices, VertexShader &&vertexShader) {
+    void draw(std::span<const InputVertex> vertices,
+              std::span<const int> indices, VertexShader &&vertexShader) {
 
       int targetWidth = m_depthBuffer.getWidth();
       int targetHeight = m_depthBuffer.getHeight();
@@ -231,7 +237,11 @@ public:
         glm::vec4 clipPos;
       };
 
-      std::vector<VSOutput> vsOutputs;
+      // 256KBのスタックを確保
+      alignas(VSOutput) std::byte buffer[256 * 1024];
+      std::pmr::monotonic_buffer_resource mem_pool(buffer, sizeof(buffer));
+      std::pmr::vector<VSOutput> vsOutputs(&mem_pool);
+
       vsOutputs.reserve(vertices.size());
       for (const auto &v : vertices) {
         auto result = vertexShader(v);
