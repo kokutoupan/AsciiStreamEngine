@@ -5,6 +5,7 @@
 #include <functional>
 #include <memory>
 #include <ranges>
+#include <span>
 #include <stdexcept>
 #include <typeindex>
 #include <unordered_map>
@@ -71,40 +72,17 @@ struct Acceleration {
   glm::vec3 value{0.0f}; ///< 加速度ベクトル
 };
 
-/**
- * @brief
- * ユーザー定義の頂点バッファアセットを型消去して一律に扱うための基底インターフェース。
- */
-class IBufferAsset {
-public:
-  virtual ~IBufferAsset() = default;
+template <typename InputVertex> struct VectorMeshHolder {
+  std::vector<InputVertex> vertices;
+  std::vector<int> indices;
 };
 
-/**
- * @brief ゲーム側やAIが定義した具体的な頂点型 (InputVertex)
- * を保持するメッシュアセットの具象クラス。
- * @tparam InputVertex ユーザー定義の頂点構造体
- */
-template <typename InputVertex> struct MeshAsset : public IBufferAsset {
-  std::vector<InputVertex> vertices; ///< 頂点データ配列
-  std::vector<int> indices;          ///< インデックスデータ配列
-};
-
-/**
- * @brief メッシュアセットの参照を保持するコンポーネント。
- */
 struct VertexComponent {
-  std::shared_ptr<IBufferAsset> asset =
-      nullptr; ///< 型消去されたメッシュアセットへの共有ポインタ
+  std::span<const std::byte> vertices; // 型消去された頂点用の窓 (16バイト)
+  std::span<const int> indices;        // インデックス用の窓 (16バイト)
+  std::size_t stride = 0;              // 頂点1個のバイトサイズ (8バイト)
 
-  /**
-   * @brief アセットを指定した具体的な頂点型の MeshAsset にキャストします。
-   * @tparam InputVertex キャスト先の頂点構造体
-   * @return const MeshAsset<InputVertex>& キャストされたアセットへの定数参照
-   */
-  template <typename InputVertex> const MeshAsset<InputVertex> &cast() const {
-    return *static_cast<const MeshAsset<InputVertex> *>(asset.get());
-  }
+  std::shared_ptr<const void> life_support = nullptr;
 };
 
 /**

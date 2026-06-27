@@ -22,7 +22,7 @@
 #include <glm/glm.hpp>
 #include <glm/gtc/matrix_transform.hpp>
 
-#include "cube_data.hpp"
+#include "cube.hpp" // cube.obj から自動生成
 
 // =============================================================================
 // 1. 特殊な動き (床と平行な円軌道) を担当する AI (EntityBehavior)
@@ -146,13 +146,34 @@ public:
     // ---------------------------------------------------------------------
     // アセット準備: 立方体メッシュデータの作成
     // ---------------------------------------------------------------------
-    auto cubeMesh = std::make_shared<MeshAsset<Shaders::DefaultVertex>>();
-    cubeMesh->vertices = MeshUtil::create_vertices(
-        cube_vertex_count, cube_positions, cube_normals, cube_texcoords);
-    ;
-    cubeMesh->indices =
-        MeshUtil::create_indices(cube_index_count, cube_indices);
-    VertexComponent cubeVertexComp{.asset = cubeMesh};
+
+    // 動的な場合なら
+    // auto cube_vertex = MeshUtil::create_vertices(
+    //     cube_vertex_count, cube_positions, cube_normals, cube_texcoords);
+    // ;
+    // auto cube_index = MeshUtil::create_indices(cube_index_count,
+    // cube_indices);
+    //
+    // std::shared_ptr<VectorMeshHolder<Shaders::DefaultVertex>> mesh_asset =
+    //     std::make_shared<VectorMeshHolder<Shaders::DefaultVertex>>(
+    //         VectorMeshHolder<Shaders::DefaultVertex>{cube_vertex,
+    //         cube_index});
+    //
+    // VertexComponent cubeVertexComp{
+    //     .vertices = std::as_bytes(std::span(mesh_asset->vertices)),
+    //     .indices = mesh_asset->indices,
+    //     .stride = sizeof(Shaders::DefaultVertex),
+    //     .life_support = mesh_asset};
+
+    static constexpr auto cube_vertices =
+        MeshUtil::create_static_vertices<cube_vertex_count>(
+            cube_positions, cube_normals, cube_texcoords);
+    static constexpr auto cube_index =
+        MeshUtil::create_static_indices<cube_index_count>(cube_indices);
+    VertexComponent cubeVertexComp{.vertices =
+                                       std::as_bytes(std::span(cube_vertices)),
+                                   .indices = cube_index,
+                                   .stride = sizeof(Shaders::DefaultVertex)};
 
     // ---------------------------------------------------------------------
     // エンティティの生成
@@ -160,8 +181,8 @@ public:
 
     Transform planeTrans{.position = glm::vec3(0.0f, GROUND_Y, -7.5f)};
     Velocity planeVel{};
-    VertexComponent planeVertexComp{
-        .asset = nullptr}; // 描画はセッション側で静的におこなうためnullptrでOK
+    VertexComponent
+        planeVertexComp{}; // 描画はセッション側で静的におこなうためnullptrでOK
     Collider planeCollider{
         .centerOffset = glm::vec3(0.0f),
         .halfExtents = glm::vec3(
@@ -299,7 +320,8 @@ public:
   void onDisconnect(EcsGameWorld &world) override {}
 
   /**
-   * @brief 入力デバイスの入力状況に応じてカメラの位置と視線を移動・調整します。
+   * @brief
+   * 入力デバイスの入力状況に応じてカメラの位置と視線を移動・調整します。
    */
   void update(int clientId, const InputDevice &input,
               EcsGameWorld &world) override {
@@ -385,10 +407,13 @@ public:
         std::bind_back(Shaders::shadowVS, identityModel, lightSpaceMatrix));
 
     for (auto &&[trans, vComp] : std::views::zip(transforms, vertexComps)) {
-      if (!vComp.asset)
+      if (vComp.vertices.empty())
         continue;
-      const auto &mesh = vComp.cast<Shaders::DefaultVertex>();
-      shadowPass.draw(mesh.vertices, mesh.indices,
+      std::span<const Shaders::DefaultVertex> vertices(
+          reinterpret_cast<const Shaders::DefaultVertex *>(
+              vComp.vertices.data()),
+          vComp.vertices.size() / vComp.stride);
+      shadowPass.draw(vertices, vComp.indices,
                       std::bind_back(Shaders::shadowVS, trans.to_matrix(),
                                      lightSpaceMatrix));
     }
@@ -407,13 +432,16 @@ public:
         });
 
     for (auto &&[trans, vComp] : std::views::zip(transforms, vertexComps)) {
-      const auto &mesh = vComp.cast<Shaders::DefaultVertex>();
-      if (!vComp.asset)
+      if (vComp.vertices.empty())
         continue;
       glm::mat4 model = trans.to_matrix();
       glm::mat4 mvp = proj * view * model;
 
-      geometryPass.draw(mesh.vertices, mesh.indices,
+      std::span<const Shaders::DefaultVertex> vertices(
+          reinterpret_cast<const Shaders::DefaultVertex *>(
+              vComp.vertices.data()),
+          vComp.vertices.size() / vComp.stride);
+      geometryPass.draw(vertices, vComp.indices,
                         std::bind_back(Shaders::geometryVS, model, mvp),
                         [&](int x, int y, const Shaders::DefaultVarying &in) {
                           albedoBuffer->at(x, y) = 80;

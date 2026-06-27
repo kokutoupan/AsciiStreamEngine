@@ -77,31 +77,30 @@ endif()
 # エンジン補助機能: OBJアセットをC++ソースにコンパイルするマクロ
 # =============================================================================
 function(astream_compile_assets TARGET_NAME)
-  # 引数以降に渡されたすべてのOBJファイルを取得
   set(OBJ_FILES ${ARGN})
-  set(GENERATED_SOURCES "")
+  set(GENERATED_HEADERS "")
 
   foreach(OBJ_PATH ${OBJ_FILES})
-    # ファイル名（拡張子なし）を取得 (例: Assets/cube.obj -> cube)
     get_filename_component(OBJ_NAME ${OBJ_PATH} NAME_WE)
 
-    # 各ターゲットごとのビルドディレクトリ配下に.cppを出力
-    set(OUTPUT_CPP "${CMAKE_CURRENT_BINARY_DIR}/generated_assets/${OBJ_NAME}.cpp")
+    set(OUTPUT_HPP "${CMAKE_CURRENT_BINARY_DIR}/generated_assets/${OBJ_NAME}.hpp")
 
-    # カスタムコマンドの登録（スクリプトはルート直下の tools/ から呼び出す）
     add_custom_command(
-            OUTPUT ${OUTPUT_CPP}
-            COMMAND deno run --allow-read --allow-write ${CMAKE_SOURCE_DIR}/tools/obj_to_cpp.ts ${CMAKE_CURRENT_SOURCE_DIR}/${OBJ_PATH} ${OUTPUT_CPP}
-            DEPENDS ${CMAKE_CURRENT_SOURCE_DIR}/${OBJ_PATH} ${CMAKE_SOURCE_DIR}/tools/obj_to_cpp.ts
-            COMMENT "AstreamEngine: Compiling asset ${OBJ_PATH} -> ${OUTPUT_CPP}"
-        )
-    list(APPEND GENERATED_SOURCES ${OUTPUT_CPP})
+        OUTPUT ${OUTPUT_HPP}
+        COMMAND deno run --allow-read --allow-write ${CMAKE_SOURCE_DIR}/tools/obj_to_cpp.ts ${CMAKE_CURRENT_SOURCE_DIR}/${OBJ_PATH} ${OUTPUT_HPP}
+        DEPENDS ${CMAKE_CURRENT_SOURCE_DIR}/${OBJ_PATH} ${CMAKE_SOURCE_DIR}/tools/obj_to_cpp.ts
+        COMMENT "AstreamEngine: Compiling asset ${OBJ_PATH} -> ${OUTPUT_HPP}"
+    )
+    list(APPEND GENERATED_HEADERS ${OUTPUT_HPP})
   endforeach()
 
-  # 呼び出し元のターゲットに、自動生成された.cpp群を注入
-  target_sources(${TARGET_NAME} PRIVATE ${GENERATED_SOURCES})
+  # ターゲットごとにユニークなカスタムターゲット（アセットジェネレータ）を作る
+  set(ASSET_GEN_TARGET "${TARGET_NAME}_asset_gen")
+  add_custom_target(${ASSET_GEN_TARGET} DEPENDS ${GENERATED_HEADERS})
 
-  # インクルードパスも自動で通す
+  add_dependencies(${TARGET_NAME} ${ASSET_GEN_TARGET})
+
+  # インクルードパスを通す
   target_include_directories(${TARGET_NAME} PRIVATE "${CMAKE_CURRENT_BINARY_DIR}/generated_assets")
 endfunction()
 

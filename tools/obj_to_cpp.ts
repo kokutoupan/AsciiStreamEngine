@@ -1,6 +1,6 @@
 // obj_to_cpp.ts
 if (Deno.args.length < 2) {
-  console.error("Usage: deno run --allow-read --allow-write obj_to_cpp.ts <input.obj> <output.cpp>");
+  console.error("Usage: deno run --allow-read --allow-write obj_to_cpp.ts <input.obj> <output.hpp>");
   Deno.exit(1);
 }
 
@@ -54,8 +54,8 @@ const fmt = (n: number): string => Number.isInteger(n) ? `${n}.0f` : `${n}f`;
 
 let cppContent = `// Generated from ${inputPath} via astream asset compiler\n`;
 cppContent += `#include <cstdint>\n\n`;
-cppContent += `extern constexpr uint32_t ${meshName}_vertex_count = ${uniqueVertices.length};\n`;
-cppContent += `extern constexpr uint32_t ${meshName}_index_count = ${indices.length};\n\n`;
+cppContent += `inline constexpr uint32_t ${meshName}_vertex_count = ${uniqueVertices.length};\n`;
+cppContent += `inline constexpr uint32_t ${meshName}_index_count = ${indices.length};\n\n`;
 
 // 各属性の書き出し用配列を準備
 const finalPositions: string[] = [];
@@ -76,7 +76,7 @@ for (const token of uniqueVertices) {
 }
 
 // 1. Positions 配列の書き出し
-cppContent += `extern constexpr float ${meshName}_positions[] = {\n    `;
+cppContent += `inline constexpr float ${meshName}_positions[] = {\n    `;
 for (let i = 0; i < finalPositions.length; i++) {
   cppContent += `${finalPositions[i]}, `;
   if ((i + 1) % 3 === 0) cppContent += "\n    "; // 3頂点ごとに改行
@@ -84,7 +84,7 @@ for (let i = 0; i < finalPositions.length; i++) {
 cppContent += `\n};\n\n`;
 
 // 2. Normals 配列の書き出し
-cppContent += `extern constexpr float ${meshName}_normals[] = {\n    `;
+cppContent += `inline constexpr float ${meshName}_normals[] = {\n    `;
 for (let i = 0; i < finalNormals.length; i++) {
   cppContent += `${finalNormals[i]}, `;
   if ((i + 1) % 3 === 0) cppContent += "\n    ";
@@ -92,7 +92,7 @@ for (let i = 0; i < finalNormals.length; i++) {
 cppContent += `\n};\n\n`;
 
 // 3. Texcoords (UV) 配列の書き出し
-cppContent += `extern constexpr float ${meshName}_texcoords[] = {\n    `;
+cppContent += `inline constexpr float ${meshName}_texcoords[] = {\n    `;
 for (let i = 0; i < finalUvs.length; i++) {
   cppContent += `${finalUvs[i]}, `;
   if ((i + 1) % 4 === 0) cppContent += "\n    "; // 4頂点ごとに改行
@@ -100,12 +100,17 @@ for (let i = 0; i < finalUvs.length; i++) {
 cppContent += `\n};\n\n`;
 
 // 4. Indices 配列の書き出し
-cppContent += `extern constexpr int ${meshName}_indices[] = {\n    `;
+cppContent += `inline constexpr int ${meshName}_indices[] = {\n    `;
 for (let i = 0; i < indices.length; i++) {
   cppContent += `${indices[i]}, `;
   if ((i + 1) % 12 === 0) cppContent += "\n    "; // 12インデックスごとに改行
 }
 cppContent += `\n};\n`;
+
+const outputDir = outputPath.substring(0, outputPath.lastIndexOf("/"));
+
+// ディレクトリが存在しなければ再帰的に作成する
+await Deno.mkdir(outputDir, { recursive: true });
 
 await Deno.writeTextFile(outputPath, cppContent);
 console.log(`Successfully compiled asset with Indices: ${inputPath} -> ${outputPath}`);
