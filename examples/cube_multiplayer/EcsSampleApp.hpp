@@ -79,6 +79,7 @@ class EcsGameWorld : public GameWorld {
 private:
   Registry m_registry; ///< ECSのレジストリ実体
 
+public:
   // システムが処理対象を識別するためのタグ定義
   static constexpr std::uint64_t TAG_NORMAL_PHYSICS =
       1; ///< 通常の物理オブジェクト用タグ
@@ -91,7 +92,6 @@ private:
   // 床の高さの基準
   static constexpr float GROUND_Y = -2.0f;
 
-public:
   EcsGameWorld() {
     std::cout << "[ECS Engine] Initializing EcsGameWorld..." << std::endl;
 
@@ -243,9 +243,58 @@ public:
   }
 
   /**
-   * @brief ECSレジストリへの定数参照を取得します。
+   * @brief ECSレジストリへの参照を取得します。
    */
+  Registry &get_registry() { return m_registry; }
   const Registry &get_registry() const { return m_registry; }
+
+  /**
+   * @brief ワールドをリセットし、通常キューブを再生成します。
+   */
+  void resetWorld() {
+    // 1. TAG_NORMAL_PHYSICS のエンティティをすべて集める
+    std::vector<EntityId> to_destroy;
+    auto &tags = m_registry.get_raw_data<std::uint64_t>();
+    auto &entities = m_registry.get_raw_entities<std::uint64_t>();
+    for (std::size_t i = 0; i < tags.size(); ++i) {
+      if ((tags[i] & OBJECT_TYPE_MASK) == TAG_NORMAL_PHYSICS) {
+        to_destroy.push_back(entities[i]);
+      }
+    }
+
+    // 2. 破壊する
+    for (auto id : to_destroy) {
+      m_registry.destroy_entity(id);
+    }
+
+    // 3. 通常キューブを30個再生成
+    static constexpr auto cube_vertices =
+        MeshUtil::create_static_vertices<cube_vertex_count>(
+            cube_positions, cube_normals, cube_texcoords);
+    static constexpr auto cube_index =
+        MeshUtil::create_static_indices<cube_index_count>(cube_indices);
+    VertexComponent cubeVertexComp{.vertices =
+                                       std::as_bytes(std::span(cube_vertices)),
+                                   .indices = cube_index,
+                                   .stride = sizeof(Shaders::DefaultVertex)};
+
+    for (int i = 0; i < 30; ++i) {
+      float x = static_cast<float>((i % 6) - 3) * 3.0f;
+      float z = static_cast<float>((i / 6) - 2) * -4.0f;
+      float initialY = 4.0f + static_cast<float>(i % 3) * 2.0f;
+
+      Transform trans{.position = glm::vec3(x, initialY, z),
+                      .rotation = glm::vec3(0.0f),
+                      .scale = glm::vec3(0.5f)};
+
+      Collider cubeCollider{.centerOffset = glm::vec3(0.0f),
+                            .halfExtents = glm::vec3(0.5f)};
+
+      m_registry.create_entity(trans, Velocity{}, Acceleration{},
+                               cubeVertexComp, TAG_NORMAL_PHYSICS, nullptr,
+                               cubeCollider);
+    }
+  }
 };
 
 // =============================================================================
@@ -367,6 +416,25 @@ public:
       m_cameraPos += glm::vec3(0, 1, 0) * camSpeed;
     if (input.getKey(Key::q) || input.getKey(Key::Q))
       m_cameraPos -= glm::vec3(0, 1, 0) * camSpeed;
+
+    // スペースキーでレイキャスト＆破壊
+    if (input.getKeyDown(Key::Space)) {
+      auto hit =
+          raycast_now(world.get_registry(), m_cameraPos, cameraFront, 100.0f);
+      if (hit.hit && world.get_registry().is_valid(hit.entity)) {
+        std::uint64_t tag =
+            world.get_registry().get_component<std::uint64_t>(hit.entity);
+        if ((tag & EcsGameWorld::OBJECT_TYPE_MASK) ==
+            EcsGameWorld::TAG_NORMAL_PHYSICS) {
+          world.get_registry().destroy_entity(hit.entity);
+        }
+      }
+    }
+
+    // Rキーでリセット
+    if (input.getKeyDown(Key::r) || input.getKeyDown(Key::R)) {
+      world.resetWorld();
+    }
   }
 
   /**
