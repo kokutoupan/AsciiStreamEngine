@@ -19,6 +19,8 @@
 #include <astream/TextureUtil.hpp>
 #include <astream/shaders/DefaultShaders.hpp>
 
+#include <astream/PhysicsUtil.hpp>
+
 #include <glm/glm.hpp>
 #include <glm/gtc/matrix_transform.hpp>
 
@@ -84,6 +86,7 @@ private:
       2; ///< 特殊な円軌道オブジェクト用タグ
   static constexpr std::uint64_t TAG_GROUND =
       3; ///< 【New】床（静的コライダー）識別用タグ
+  static constexpr std::uint64_t OBJECT_TYPE_MASK = 0x3;
 
   // 床の高さの基準
   static constexpr float GROUND_Y = -2.0f;
@@ -104,7 +107,7 @@ public:
       glm::vec3 gravity(0.0f, -9.8f, 0.0f);
 
       for (auto &&[tag, accel] : std::views::zip(tags, accelerations)) {
-        if (tag == TAG_NORMAL_PHYSICS) {
+        if ((tag & OBJECT_TYPE_MASK) == TAG_NORMAL_PHYSICS) {
           accel.value = gravity;
         }
       }
@@ -123,16 +126,17 @@ public:
 
       for (std::size_t i = 0; i < colliders.size(); ++i) {
         // 通常物理オブジェクトであり、かつ何らかのオブジェクトと交差している場合
-        if (tags[i] == TAG_NORMAL_PHYSICS &&
+        if ((tags[i] & OBJECT_TYPE_MASK) == TAG_NORMAL_PHYSICS &&
             !colliders[i].hitEntities.empty()) {
 
           for (std::uint32_t hitId : colliders[i].hitEntities) {
             // 衝突相手のタグを安全に確認
-            if (reg.has_component<std::uint64_t>(hitId)) {
+            if (reg.is_valid(hitId)) {
               std::uint64_t hitTag = reg.get_component<std::uint64_t>(hitId);
 
               // 相手が「床」であり、自分が現在落下中の場合のみ反発（反発係数1.0）
-              if (hitTag == TAG_GROUND && velocities[i].value.y < 0.0f) {
+              if ((hitTag & OBJECT_TYPE_MASK) == TAG_GROUND &&
+                  velocities[i].value.y < 0.0f) {
                 accelerations[i].value = glm::vec3(0.0f);
                 velocities[i].value.y = std::abs(velocities[i].value.y) * 1.0f;
                 break; // 床との衝突処理が確定したらこのオブジェクトのチェックを抜ける

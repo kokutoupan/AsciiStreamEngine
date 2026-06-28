@@ -16,6 +16,23 @@
 #include <glm/glm.hpp>
 #include <glm/gtc/matrix_transform.hpp>
 
+using EntityId = std::uint32_t;
+
+namespace EntityIdUtil {
+// 下位16bitをインデックス、上位16bitを世代（Generation）とする
+static constexpr std::uint32_t INDEX_MASK = 0x0000FFFF;
+static constexpr std::uint32_t GEN_MASK = 0xFFFF0000;
+static constexpr std::uint32_t GEN_SHIFT = 16;
+
+inline std::uint32_t get_index(EntityId id) { return id & INDEX_MASK; }
+inline std::uint32_t get_gen(EntityId id) {
+  return (id & GEN_MASK) >> GEN_SHIFT;
+}
+inline EntityId make_id(std::uint32_t index, std::uint32_t gen) {
+  return (gen << GEN_SHIFT) | (index & INDEX_MASK);
+}
+} // namespace EntityIdUtil
+
 class Registry;
 class EntityBehavior;
 
@@ -59,7 +76,7 @@ struct Transform {
 };
 
 /**
- * @brief エンティティの速度を表すコンポーネント。
+ * @brief エンティティの速度を表すコンポーモント。
  */
 struct Velocity {
   glm::vec3 value{0.0f}; ///< 速度ベクトル
@@ -104,7 +121,7 @@ public:
    * @param reg 呼び出し元のレジストリ実体
    * @param dt 前フレームからの経過時間 (デルタタイム)
    */
-  virtual void update(std::size_t index, std::uint32_t entityId, Registry &reg,
+  virtual void update(std::size_t index, EntityId entityId, Registry &reg,
                       float dt) = 0;
 };
 
@@ -124,7 +141,7 @@ struct Collider {
   glm::vec3 halfExtents{
       0.0f}; ///< AABBの各軸の半幅サイズ (幅/2, 高さ/2, 奥行き/2)
 
-  std::vector<std::uint32_t>
+  std::vector<EntityId>
       hitEntities; ///< このフレームで接触した他エンティティのIDリスト
 };
 
@@ -144,7 +161,7 @@ public:
    * 指定したエンティティに関連付けられたコンポーネントをプールから削除します。
    * @param entity_idx 削除対象のエンティティインデックス
    */
-  virtual void remove_entity(std::uint32_t entity_idx) = 0;
+  virtual void remove_entity(EntityId entity_idx) = 0;
 };
 
 /**
@@ -155,9 +172,11 @@ public:
  * @tparam T 格納するコンポーネントの型
  */
 template <typename T> class ComponentPool : public IPool {
+  friend class Registry;
+
 private:
   std::vector<T> dense_data; ///< 密配列: コンポーネントの実体を連続メモリに格納
-  std::vector<std::uint32_t> dense_to_entity; ///< 密から粗へのインデックス写像
+  std::vector<EntityId> dense_to_entity;      ///< 密から粗へのインデックス写像
                                               ///< (dense_idx -> entity_idx)
   std::vector<std::uint32_t> entity_to_dense; ///< 粗から密へのインデックス写像
                                               ///< (entity_idx -> dense_idx)
@@ -169,11 +188,12 @@ public:
    * @param entity_idx 対象のエンティティインデックス
    * @param component 割り当てるコンポーネントの実体
    */
-  void assign(std::uint32_t entity_idx, T component) {
-    if (entity_idx >= entity_to_dense.size()) {
-      entity_to_dense.resize(entity_idx + 1, 0xFFFFFFFF);
+  void assign(EntityId entity_idx, T component) {
+    auto idx = EntityIdUtil::get_index(entity_idx);
+    if (idx >= entity_to_dense.size()) {
+      entity_to_dense.resize(idx + 1, 0xFFFFFFFF);
     }
-    entity_to_dense[entity_idx] = static_cast<std::uint32_t>(dense_data.size());
+    entity_to_dense[idx] = static_cast<std::uint32_t>(dense_data.size());
     dense_to_entity.push_back(entity_idx);
     dense_data.push_back(std::move(component));
   }
@@ -182,26 +202,26 @@ public:
    * @brief 指定したエンティティのコンポーネントを削除します。
    * @param entity_idx 対象のエンティティインデックス
    */
-  void remove(std::uint32_t entity_idx) {
-    if (entity_idx >= entity_to_dense.size() ||
-        entity_to_dense[entity_idx] == 0xFFFFFFFF)
+  void remove(EntityId entity_idx) {
+    auto idx = EntityIdUtil::get_index(entity_idx);
+    if (idx >= entity_to_dense.size() || entity_to_dense[idx] == 0xFFFFFFFF)
       return;
 
-    std::uint32_t target_dense_idx = entity_to_dense[entity_idx];
+    std::uint32_t target_dense_idx = entity_to_dense[idx];
     std::uint32_t last_dense_idx =
         static_cast<std::uint32_t>(dense_data.size() - 1);
 
     // 順序を保持しない高速削除 (末尾要素と入れ替えて pop_back)
     if (target_dense_idx != last_dense_idx) {
       dense_data[target_dense_idx] = std::move(dense_data[last_dense_idx]);
-      std::uint32_t moved_entity = dense_to_entity[last_dense_idx];
+      EntityId moved_entity = dense_to_entity[last_dense_idx];
       dense_to_entity[target_dense_idx] = moved_entity;
-      entity_to_dense[moved_entity] = target_dense_idx;
+      entity_to_dense[EntityIdUtil::get_index(moved_entity)] = target_dense_idx;
     }
 
     dense_data.pop_back();
     dense_to_entity.pop_back();
-    entity_to_dense[entity_idx] = 0xFFFFFFFF;
+    entity_to_dense[idx] = 0xFFFFFFFF;
   }
 
   /**
@@ -210,7 +230,7 @@ public:
    * (インターフェース実装)。
    * @param entity_idx 削除対象のエンティティインデックス
    */
-  void remove_entity(std::uint32_t entity_idx) override { remove(entity_idx); }
+  void remove_entity(EntityId entity_idx) override { remove(entity_idx); }
 
   /**
    * @brief
@@ -219,10 +239,11 @@ public:
    * @return true 持っている場合
    * @return false 持っていない場合
    */
-  bool has(std::uint32_t entity_idx) const {
-    if (entity_idx >= entity_to_dense.size())
+  bool has(EntityId entity_idx) const {
+    auto idx = EntityIdUtil::get_index(entity_idx);
+    if (idx >= entity_to_dense.size())
       return false;
-    return entity_to_dense[entity_idx] != 0xFFFFFFFF;
+    return entity_to_dense[idx] != 0xFFFFFFFF;
   }
 
   /**
@@ -230,8 +251,9 @@ public:
    * @param entity_idx 対象のエンティティインデックス
    * @return T& コンポーネントへの参照
    */
-  T &get(std::uint32_t entity_idx) {
-    return dense_data[entity_to_dense[entity_idx]];
+  T &get(EntityId entity_idx) {
+    auto idx = EntityIdUtil::get_index(entity_idx);
+    return dense_data[entity_to_dense[idx]];
   }
 
   /**
@@ -240,8 +262,9 @@ public:
    * @param entity_idx 対象のエンティティインデックス
    * @return const T& コンポーネントへの定数参照
    */
-  const T &get(std::uint32_t entity_idx) const {
-    return dense_data[entity_to_dense[entity_idx]];
+  const T &get(EntityId entity_idx) const {
+    auto idx = EntityIdUtil::get_index(entity_idx);
+    return dense_data[entity_to_dense[idx]];
   }
 
   /**
@@ -259,11 +282,9 @@ public:
   /**
    * @brief
    * コンポーネントが割り当てられているエンティティIDの密配列を取得します。
-   * @return const std::vector<std::uint32_t>& エンティティID配列への参照
+   * @return const std::vector<EntityId>& エンティティID配列への参照
    */
-  const std::vector<std::uint32_t> &get_entities() const {
-    return dense_to_entity;
-  }
+  const std::vector<EntityId> &get_entities() const { return dense_to_entity; }
 };
 
 // =============================================================================
@@ -288,20 +309,28 @@ private:
   std::vector<std::move_only_function<void(Registry &, float dt)>>
       post_systems; ///< 登録された後処理システム関数のリスト
 
-  std::uint32_t next_entity_id = 0;    ///< 次に割り当てる新規エンティティID
-  std::vector<std::uint32_t> free_ids; ///< 再利用可能な解放済みエンティティID
+  std::uint32_t next_entity_id = 0; ///< 次に割り当てる新規エンティティID
+  std::vector<EntityId> free_ids;   ///< 再利用可能な解放済みエンティティID
+
+  std::vector<EntityId>
+      deferred_destroy_queue; // フレーム終了時に削除するEntityのリスト
+
+  static constexpr std::uint64_t ALIVE_BIT =
+      0x8000000000000000ULL; // tagの最上位bitは生存フラグ
 
   /**
    * @brief 使用可能なエンティティIDを生成または再利用キューから取得します。
    * @return std::uint32_t 生成または再利用されたエンティティID
    */
-  std::uint32_t generate_raw_id() {
+  EntityId generate_raw_id() {
     if (!free_ids.empty()) {
       auto id = free_ids.back();
       free_ids.pop_back();
       return id;
     }
-    return next_entity_id++;
+
+    // 新世代
+    return EntityIdUtil::make_id(next_entity_id++, 0);
   }
 
 public:
@@ -344,6 +373,26 @@ public:
   }
 
   /**
+   * @brief IDの世代が今本当に生きているものと一致するかチェック
+   * 必ず全Entityが持つ `std::uint64_t`(tag) プールをマスターとして突合する
+   */
+  bool is_valid(EntityId id) const {
+    auto type_idx = std::type_index(typeid(std::uint64_t));
+    if (!pools.contains(type_idx))
+      return false;
+
+    auto index = EntityIdUtil::get_index(id);
+    auto &tag_pool = get_pool<std::uint64_t>();
+
+    if (!tag_pool.has(index))
+      return false;
+    if (tag_pool.get_entities()[tag_pool.entity_to_dense[index]] != id)
+      return false;
+
+    return (tag_pool.get(index) & ALIVE_BIT) != 0;
+  }
+
+  /**
    * @brief
    * 基本コンポーネント群およびコライダーを紐付けたエンティティを一括生成します。
    *
@@ -356,20 +405,21 @@ public:
    * @param collider コライダー設定 (デフォルトは空コライダー)
    * @return std::uint32_t 生成されたエンティティID
    */
-  std::uint32_t
-  create_entity(Transform transform, Velocity velocity,
-                Acceleration acceleration = {}, VertexComponent vertex = {},
-                std::uint64_t tag = 0,
-                std::unique_ptr<EntityBehavior> behavior = nullptr,
-                Collider collider = Collider{}) {
-    std::uint32_t id = generate_raw_id();
+  EntityId create_entity(Transform transform, Velocity velocity,
+                         Acceleration acceleration = {},
+                         VertexComponent vertex = {}, std::uint64_t tag = 0,
+                         std::unique_ptr<EntityBehavior> behavior = nullptr,
+                         Collider collider = Collider{}) {
+    EntityId id = generate_raw_id();
+
+    std::uint64_t initial_tag = tag | ALIVE_BIT;
 
     // 各コンポーネントを一括して割り当て
     add_component<Transform>(id, std::move(transform));
     add_component<Velocity>(id, std::move(velocity));
     add_component<Acceleration>(id, std::move(acceleration));
     add_component<VertexComponent>(id, std::move(vertex));
-    add_component<std::uint64_t>(id, tag);
+    add_component<std::uint64_t>(id, initial_tag);
     add_component<ScriptComponent>(id, ScriptComponent{std::move(behavior)});
     add_component<Collider>(id, std::move(collider));
 
@@ -381,11 +431,32 @@ public:
    * エンティティを動的に削除し、全プールから関連コンポーネントを剥ぎ取り、IDを再利用可能にします。
    * @param entity_id 削除対象のエンティティID
    */
-  void destroy_entity(std::uint32_t entity_id) {
+  void destroy_entity(EntityId entity_id) {
     for (auto &[_, pool] : pools) {
       pool->remove_entity(entity_id);
     }
-    free_ids.push_back(entity_id);
+
+    // 世代を進める　
+    std::uint32_t next_gen = (EntityIdUtil::get_gen(entity_id) + 1) & 0xFFFF;
+    EntityId next_id =
+        EntityIdUtil::make_id(EntityIdUtil::get_index(entity_id), next_gen);
+    free_ids.push_back(next_id);
+  }
+
+  /**
+   * @brief
+   * エンティティの生存フラグをoffにし後にエンジン側で削除します
+   * @param entity_id 削除対象のエンティティID
+   */
+  void destroy_entity_deferred(EntityId id) {
+    if (!is_valid(id))
+      return;
+
+    auto &tag = get_pool<std::uint64_t>().get(id);
+    if (tag & ALIVE_BIT) {
+      tag &= ~ALIVE_BIT; // 生存フラグを折ってシステムから見えなくする
+      deferred_destroy_queue.push_back(id);
+    }
   }
 
   /**
@@ -394,8 +465,7 @@ public:
    * @param entity_id 対象のエンティティID
    * @param component 追加するコンポーネント実体
    */
-  template <typename T>
-  void add_component(std::uint32_t entity_id, T component) {
+  template <typename T> void add_component(EntityId entity_id, T component) {
     get_pool<T>().assign(entity_id, std::move(component));
   }
 
@@ -404,7 +474,7 @@ public:
    * @tparam T コンポーネントの型
    * @param entity_id 対象のエンティティID
    */
-  template <typename T> void remove_component(std::uint32_t entity_id) {
+  template <typename T> void remove_component(EntityId entity_id) {
     get_pool<T>().remove(entity_id);
   }
 
@@ -414,7 +484,7 @@ public:
    * @param entity_id 対象のエンティティID
    * @return T& コンポーネントへの参照
    */
-  template <typename T> T &get_component(std::uint32_t entity_id) {
+  template <typename T> T &get_component(EntityId entity_id) {
     return get_pool<T>().get(entity_id);
   }
 
@@ -424,7 +494,7 @@ public:
    * @param entity_id 対象のエンティティID
    * @return const T& コンポーネントへの定数参照
    */
-  template <typename T> const T &get_component(std::uint32_t entity_id) const {
+  template <typename T> const T &get_component(EntityId entity_id) const {
     return get_pool<T>().get(entity_id);
   }
 
@@ -435,7 +505,7 @@ public:
    * @return true コンポーネントを持っている場合
    * @return false コンポーネントを持っていない場合
    */
-  template <typename T> bool has_component(std::uint32_t entity_id) const {
+  template <typename T> bool has_component(EntityId entity_id) const {
     auto type_idx = std::type_index(typeid(T));
     if (!pools.contains(type_idx))
       return false;
@@ -715,9 +785,18 @@ public:
    * @param dt 前フレームからの経過時間 (デルタタイム)
    */
   void update(float dt) {
+
+    auto clear_destroy_queue = [&] {
+      for (EntityId id : deferred_destroy_queue) {
+        destroy_entity(id);
+      }
+      deferred_destroy_queue.clear();
+    };
+
     // 1. 登録された前処理システムの実行
     for (auto &system : pre_systems) {
       system(*this, dt);
+      clear_destroy_queue();
     }
 
     auto &scripts = get_raw_data<ScriptComponent>();
@@ -728,16 +807,19 @@ public:
       if (scripts[i].behavior) {
         scripts[i].behavior->update(i, entities[i], *this, dt);
       }
+      clear_destroy_queue();
     }
 
     // 3. 登録された全システム関数の実行
     for (auto &system : systems) {
       system(*this, dt);
+      clear_destroy_queue();
     }
 
     // 4. 登録された後処理システムの実行
     for (auto &system : post_systems) {
       system(*this, dt);
+      clear_destroy_queue();
     }
   }
 };
