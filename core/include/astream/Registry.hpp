@@ -7,6 +7,7 @@
 #include <ranges>
 #include <span>
 #include <stdexcept>
+#include <tuple>
 #include <typeindex>
 #include <unordered_map>
 #include <utility>
@@ -123,14 +124,6 @@ public:
    */
   virtual void update(std::size_t index, EntityId entityId, Registry &reg,
                       float dt) = 0;
-};
-
-/**
- * @brief エンティティに動的な振る舞いを紐付けるスクリプトコンポーネント。
- */
-struct ScriptComponent {
-  std::unique_ptr<EntityBehavior> behavior =
-      nullptr; ///< 振る舞いを定義するオブジェクトへの所有ポインタ
 };
 
 /**
@@ -291,6 +284,8 @@ public:
 // 3. レジストリ (コアエンジンインターフェース)
 // =============================================================================
 
+template <typename First, typename... Rest> class View;
+
 /**
  * @brief
  * エンティティとコンポーネントのライフサイクルおよびシステムを統合管理するレジストリクラス。
@@ -373,6 +368,18 @@ public:
   }
 
   /**
+   * @brief
+   * 複数のコンポーネントを安全かつ高速にイテレーションするViewを生成します。
+   * @tparam First
+   * ループのベースとなるコンポーネント（※一番要素数が少ないものを指定すると最速！）
+   * @tparam Rest 一緒に取得したいコンポーネント群
+   */
+  template <typename First, typename... Rest> auto view() {
+    // get_pool は対象プールが無ければ自動生成するので、安全にポインタを渡せる
+    return View<First, Rest...>(this, &get_pool<First>(), &get_pool<Rest>()...);
+  }
+
+  /**
    * @brief IDの世代が今本当に生きているものと一致するかチェック
    * 必ず全Entityが持つ `std::uint64_t`(tag) プールをマスターとして突合する
    */
@@ -384,7 +391,7 @@ public:
     auto index = EntityIdUtil::get_index(id);
     auto &tag_pool = get_pool<std::uint64_t>();
 
-    if (!tag_pool.has(index))
+    if (!tag_pool.has(id))
       return false;
     if (tag_pool.get_entities()[tag_pool.entity_to_dense[index]] != id)
       return false;
@@ -420,7 +427,6 @@ public:
     add_component<Acceleration>(id, std::move(acceleration));
     add_component<VertexComponent>(id, std::move(vertex));
     add_component<std::uint64_t>(id, initial_tag);
-    add_component<ScriptComponent>(id, ScriptComponent{std::move(behavior)});
     add_component<Collider>(id, std::move(collider));
 
     return id;
@@ -669,25 +675,6 @@ public:
   }
 
   /**
-   * @brief プール内の密配列のインデックスから、ScriptComponent を取得します。
-   * @param index プール内のインデックス
-   * @return ScriptComponent& ScriptComponentへの参照
-   */
-  ScriptComponent &get_script_by_index(std::size_t index) {
-    return get_raw_data<ScriptComponent>()[index];
-  }
-
-  /**
-   * @brief プール内の密配列のインデックスから、ScriptComponent
-   * を定数参照で取得します。
-   * @param index プール内のインデックス
-   * @return const ScriptComponent& ScriptComponentへの定数参照
-   */
-  const ScriptComponent &get_script_by_index(std::size_t index) const {
-    return get_raw_data<ScriptComponent>()[index];
-  }
-
-  /**
    * @brief プール内の密配列のインデックスから、Collider
    * コンポーネントを取得します。
    * @param index プール内のインデックス
@@ -779,7 +766,6 @@ public:
    * @brief 毎フレーム呼び出されるメイン更新ループ。
    *
    * 登録された前処理システム関数を実行し、
-   * 全ての ScriptComponent に登録された EntityBehavior の update を実行し、
    * 登録された全システム関数を実行した後、後処理システム関数を実行します。
    *
    * @param dt 前フレームからの経過時間 (デルタタイム)
@@ -799,27 +785,93 @@ public:
       clear_destroy_queue();
     }
 
-    auto &scripts = get_raw_data<ScriptComponent>();
-    auto &entities = get_raw_entities<ScriptComponent>();
-
-    // 2. 各エンティティに登録されたスクリプトの更新処理を実行
-    for (std::size_t i = 0; i < scripts.size(); ++i) {
-      if (scripts[i].behavior) {
-        scripts[i].behavior->update(i, entities[i], *this, dt);
-      }
-      clear_destroy_queue();
-    }
-
-    // 3. 登録された全システム関数の実行
+    // 2. 登録された全システム関数の実行
     for (auto &system : systems) {
       system(*this, dt);
       clear_destroy_queue();
     }
 
-    // 4. 登録された後処理システムの実行
+    // 3. 登録された後処理システムの実行
     for (auto &system : post_systems) {
       system(*this, dt);
       clear_destroy_queue();
     }
+  }
+};
+
+template <typename First, typename... Rest> class ViewIterator {
+private:
+  Registry *reg;
+  ComponentPool<First> *first_pool;
+  std::tuple<ComponentPool<Rest> *...> rest_pools;
+  std::size_t current_idx;
+
+  // 現在のインデックスが「有効」かつ「他の全コンポーネントも持っているか」を調べ、
+  // 条件を満たすまでインデックスを進める
+  void advance_to_valid() {
+    const auto &entities = first_pool->get_entities();
+    while (current_idx < entities.size()) {
+      EntityId id = entities[current_idx];
+      // 1. Entityが有効かチェック
+      if (reg->is_valid(id)) {
+        // 2. 他のすべてのプールがこのEntityを持っているかO(1)でチェック
+        bool has_all =
+            std::apply([id](auto *...pools) { return (pools->has(id) && ...); },
+                       rest_pools);
+
+        if (has_all)
+          break; // 条件を満たしたのでここでストップ
+      }
+      current_idx++;
+    }
+  }
+
+public:
+  ViewIterator(Registry *r, ComponentPool<First> *first,
+               std::tuple<ComponentPool<Rest> *...> rest, std::size_t idx)
+      : reg(r), first_pool(first), rest_pools(rest), current_idx(idx) {
+    advance_to_valid(); // 初期化時に最初の有効な要素まで進める
+  }
+
+  // 前置インクリメント
+  ViewIterator &operator++() {
+    current_idx++;
+    advance_to_valid();
+    return *this;
+  }
+
+  // 終端判定
+  bool operator!=(const ViewIterator &other) const {
+    return current_idx != other.current_idx;
+  }
+
+  std::tuple<First &, Rest &...> operator*() const {
+    EntityId id = first_pool->get_entities()[current_idx];
+    return std::apply(
+        [&](auto *...pools) {
+          // std::forward_as_tuple は各要素の「参照のタプル」を作る
+          return std::forward_as_tuple(first_pool->get(id), pools->get(id)...);
+        },
+        rest_pools);
+  }
+};
+
+template <typename First, typename... Rest> class View {
+private:
+  Registry *reg;
+  ComponentPool<First> *first_pool;
+  std::tuple<ComponentPool<Rest> *...> rest_pools;
+
+public:
+  View(Registry *r, ComponentPool<First> *first, ComponentPool<Rest> *...rest)
+      : reg(r), first_pool(first), rest_pools(rest...) {}
+
+  auto begin() const {
+    return ViewIterator<First, Rest...>(reg, first_pool, rest_pools, 0);
+  }
+
+  auto end() const {
+    return ViewIterator<First, Rest...>(reg, first_pool, rest_pools,
+                                        first_pool->get_entities().size());
   }
 };

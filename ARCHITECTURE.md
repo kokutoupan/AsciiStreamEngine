@@ -13,7 +13,6 @@
 2. **Simulationフェーズ (ECS更新)**
    - `Registry::update()` を実行。1フレーム内で以下の順序でシステムが実行されます。
      - **`pre_systems`**: 入力の適用、状態リセット、外力の加算など。
-     - **`EntityBehavior::update`**: 各エンティティに紐づくスクリプト（AIロジック）の更新。
      - **`systems` (Main)**: 通常の物理移動、メインのゲームロジック。
      - **`post_systems`**: 衝突判定、接触応答、描画用データの最終確定。
 3. **Render & Sendフェーズ (マルチスレッド並列処理コア)**
@@ -41,7 +40,6 @@
 - `reg.get_vertex_by_index(index)` -> `VertexComponent&` （描画用メッシュアセットへの参照）
 - `reg.get_collider_by_index(index)` -> `Collider&` （AABB衝突判定バッファと接触リスト）
 - `reg.get_tag_by_index(index)` -> `std::uint64_t` （オブジェクト識別用のビットマスク等 ※値渡し）
-- `reg.get_script_by_index(index)` -> `ScriptComponent&` （EntityBehaviorを内包する個別スクリプト）
 
 ### 2.3 【汎用】その他のカスタムコンポーネント・外部参照 (Entity IDアクセス)
 
@@ -54,15 +52,7 @@
 - `reg.add_component<T>(entity_id, component)` (動的な追加)
 - `reg.remove_component<T>(entity_id)` (動的な削除)
 
-### 2.4 【柔軟】EntityBehaviorによる個別・少数の特殊スクリプト操作
-
-量産される一般オブジェクト（雑魚敵や物理オブジェクトなど）は一括更新システム（`add_system`）で処理しますが、**特定のエンティティやボスキャラ、イベント用オブジェクトなどに対する個別の特殊なロジック**は、`EntityBehavior` インターフェースを継承した独自のスクリプトクラスを作成することで実装します。
-
-- `EntityBehavior::update` 内では、呼び出し元エンティティの `index` や `entityId` 、および `Registry` 自体を受け取れるため、そのエンティティ固有の動的な振る舞い（例: 周回軌道運動、特殊なフェーズ移行、個別AIなど）を自由に記述できます。
-- 生成したオブジェクトに対して `m_registry.create_entity(..., std::move(myBehavior))` のように所有ポインタをバインドすることで駆動します。
-- フレームワーク内では、全体システムが走る前のフェーズ（Simulationフェーズの第2ステップ）で、スクリプトコンポーネントを持つエンティティのみを対象に自動で個別の `update` がトリガーされます。
-
-### 2.5 禁止事項・AIへの注意点
+### 2.4 禁止事項・AIへの注意点
 
 - 独自に追加したカスタムコンポーネント `MyComponent` に対して、`reg.get_mycomponent_by_index(index)` のような関数を捏造しないこと。それは存在しない。必ず `entity_id` を用いて `reg.get_component<MyComponent>(entity_id)` でアクセスすること。
 
