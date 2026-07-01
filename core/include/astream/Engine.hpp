@@ -45,20 +45,33 @@
 // zlibによる圧縮送信ヘルパー (引数の型キャストをOSに合わせて調整)
 // =============================================================================
 inline int send_engine_frame_compressed(int sock, const char *raw_data,
-                                        size_t raw_len) {
-  uLongf comp_len = compressBound(raw_len);
-  std::vector<Bytef> comp_buf(comp_len);
+                                        size_t raw_len, uint8_t width,
+                                        uint8_t height,
+                                        std::vector<uint8_t> &comp_buf) {
+  // 1. 必要十分な圧縮バッファを確保（初回やサイズ変更時のみ resize が走る）
+  uLongf max_comp_len = compressBound(raw_len);
+  if (comp_buf.size() != max_comp_len) {
+    comp_buf.resize(max_comp_len);
+  }
 
+  // 2. raw_data から直接圧縮
+  uLongf comp_len = max_comp_len;
   int res =
       compress(comp_buf.data(), &comp_len, (const Bytef *)raw_data, raw_len);
   if (res != Z_OK)
     return -1;
 
+  // 3. サイズ（4バイト）を送信
   uint32_t net_len = htonl((uint32_t)comp_len);
-
-  // Windowsのsendは第2引数が const char* になるためキャストを明示
   if (send(sock, (const char *)&net_len, sizeof(net_len), 0) <= 0)
     return -1;
+
+  // 4. width と height（計2バイト）を直接送信
+  uint8_t meta[2] = {width, height};
+  if (send(sock, (const char *)meta, sizeof(meta), 0) <= 0)
+    return -1;
+
+  // 5. 圧縮データを送信
   return send(sock, (const char *)comp_buf.data(), (int)comp_len, 0);
 }
 
@@ -87,7 +100,7 @@ private:
     InputDevice input;
     std::unique_ptr<SessionType> context;
     std::unique_ptr<Texture2D<char>> colorBuffer;
-    std::vector<char> outputBuffer;
+    std::vector<uint8_t> compressedBuffer;
   };
 
   std::unordered_map<int, ClientSession> m_sessions;
@@ -238,19 +251,6 @@ public:
             session.colorBuffer = std::make_unique<Texture2D<char>>(
                 session.width, session.height, ' ');
 
-            const char *CLEAR_SCREEN_SEQ = "\x1b[H";
-            size_t seq_len = 3;
-
-            session.outputBuffer.resize(
-                seq_len + (session.width + 1) * session.height, '\0');
-            std::copy(CLEAR_SCREEN_SEQ, CLEAR_SCREEN_SEQ + seq_len,
-                      session.outputBuffer.begin());
-
-            for (int y = 0; y < session.height - 1; ++y) {
-              session.outputBuffer[seq_len + (session.width + 1) * y +
-                                   session.width] = '\n';
-            }
-            session.outputBuffer[session.outputBuffer.size() - 1] = '\0';
             session.size_initialized = true;
           } else {
             char recv_buf[64];
@@ -316,22 +316,12 @@ public:
             // [A] 各プレイヤー視点での描画（const world を渡す）
             session.context->render(*session.colorBuffer, const_world);
 
-            // [B] カラーバッファから送信バッファへのコピー
-            size_t streamIdx = 3;
-            int w = session.width;
-            int h = session.height;
-            for (int y = 0; y < h; ++y) {
-              const char *src_row = session.colorBuffer->getData() + (y * w);
-              char *dst_row = session.outputBuffer.data() + streamIdx;
-              std::copy_n(src_row, w, dst_row);
-              streamIdx += (w + 1);
-            }
-
-            // [C]
+            // [B]
             // 圧縮と送信（スレッドごとに個別に実行されるため、重いcompressが並列化される）
-            send_engine_frame_compressed(session.fd,
-                                         session.outputBuffer.data(),
-                                         session.outputBuffer.size());
+            send_engine_frame_compressed(
+                session.fd, session.colorBuffer->getData(),
+                session.colorBuffer->getSize(), session.width, session.height,
+                session.compressedBuffer);
           });
 
       // 3. 次フレームへの入力状態の遷移は、メインスレッドに戻って安全に一括処理

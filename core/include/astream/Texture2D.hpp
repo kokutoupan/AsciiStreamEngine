@@ -27,6 +27,7 @@ public:
   int getHeight() const { return height; }
   T *getData() { return data.data(); }
   const T *getData() const { return data.data(); }
+  size_t getSize() const { return data.size(); }
 
   T sampleBilinear(float u, float v) const {
     // 1. 座標を 0.0 ~ 1.0 にクランプ
