@@ -15,9 +15,11 @@
 // OS固有のヘッダー定義とシステムコール/ネイティブAPIのマッピング
 // =============================================================================
 #if defined(_WIN32) || defined(_WIN64)
-#include <windows.h>
 #include <winsock2.h>
 #include <ws2tcpip.h>
+
+// 最後
+#include <windows.h>
 
 #define close closesocket
 
@@ -449,7 +451,7 @@ int main(int argc, char *argv[]) {
         return -1;
       }
       uint8_t meta[2];
-      recv(fd, meta, sizeof(meta), 0);
+      recv(fd, (char *)meta, sizeof(meta), 0);
 
       uint8_t w = meta[0];
       uint8_t h = meta[1];

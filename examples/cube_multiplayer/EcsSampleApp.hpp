@@ -134,20 +134,6 @@ public:
     // エンティティの生成
     // ---------------------------------------------------------------------
 
-    Transform planeTrans{.position = glm::vec3(0.0f, GROUND_Y, -7.5f)};
-    Velocity planeVel{};
-    VertexComponent
-        planeVertexComp{}; // 描画はセッション側で静的におこなうため空でOK
-    Collider planeCollider{
-        .centerOffset = glm::vec3(0.0f),
-        .halfExtents = glm::vec3(
-            15.0f, 0.1f, 17.5f) // 幅30, 厚み0.2, 奥行き35 の巨大な壁を床化
-    };
-    // 床として世界に固定配置
-    m_registry.create_entity(planeTrans, planeVel, Acceleration{},
-                             planeVertexComp, TAG_GROUND, nullptr,
-                             planeCollider);
-
     // 1. 通常キューブを30個生成 (コライダーを付与)
     for (int i = 0; i < 30; ++i) {
       float x = static_cast<float>((i % 6) - 3) * 3.0f;
@@ -291,6 +277,20 @@ public:
         trans.rotation.z = 0.0f;
       }
     });
+
+    Transform planeTrans{.position = glm::vec3(0.0f, GROUND_Y, -7.5f)};
+    Velocity planeVel{};
+    VertexComponent
+        planeVertexComp{}; // 描画はセッション側で静的におこなうため空でOK
+    Collider planeCollider{
+        .centerOffset = glm::vec3(0.0f),
+        .halfExtents = glm::vec3(
+            15.0f, 0.1f, 17.5f) // 幅30, 厚み0.2, 奥行き35 の巨大な壁を床化
+    };
+    // 床として世界に固定配置
+    m_registry.create_entity(planeTrans, planeVel, Acceleration{},
+                             planeVertexComp, TAG_GROUND, nullptr,
+                             planeCollider);
 
     create_entitys();
   }
