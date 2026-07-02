@@ -25,9 +25,27 @@
 #include <winsock2.h>
 #include <ws2tcpip.h>
 
-// 最後
+// socketの後
 #include <windows.h>
+
+// 最後にインクルード
+#include <timeapi.h>
+
 #define close closesocket
+
+BOOL WINAPI ConsoleCtrlHandler(DWORD ctrlType) {
+  switch (ctrlType) {
+  case CTRL_C_EVENT:
+  case CTRL_BREAK_EVENT:
+  case CTRL_CLOSE_EVENT:
+    // 終了を検知したらタイマーを元に戻す
+    timeEndPeriod(1);
+    return FALSE;
+  default:
+    return FALSE;
+  }
+}
+
 #else
 #include <arpa/inet.h>
 #include <netinet/in.h>
@@ -126,6 +144,10 @@ public:
       std::println(std::cerr, "WSAStartup failed: {}", err);
       return false;
     }
+
+    SetConsoleCtrlHandler(ConsoleCtrlHandler, TRUE);
+    // 高精度なタイマー
+    timeBeginPeriod(1);
 #else
     // Linux固有：パイプ破断シグナルの無視
     signal(SIGPIPE, SIG_IGN);
@@ -187,7 +209,7 @@ public:
 
       // 多重化システムコールの呼び出しをOSごと綺麗に書き分ける
 #if defined(_WIN32)
-      int ret = WSAPoll(m_pollFds.data(), (ULONG)m_pollFds.size(), 2);
+      int ret = WSAPoll(m_pollFds.data(), (ULONG)m_pollFds.size(), 0);
 #else
       int ret = poll(m_pollFds.data(), m_pollFds.size(), 2);
 #endif
