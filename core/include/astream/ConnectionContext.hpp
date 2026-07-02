@@ -3,6 +3,7 @@
 #include <astream/InputDevice.hpp>
 #include <astream/Texture2D.hpp>
 
+// これを継承してもいいし，ちゃんとメゾットを満たしてさえいれば継承する必要はない
 template <typename WorldType> class ConnectionContext {
 public:
   virtual ~ConnectionContext() = default;

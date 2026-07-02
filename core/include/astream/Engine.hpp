@@ -59,6 +59,24 @@ BOOL WINAPI ConsoleCtrlHandler(DWORD ctrlType) {
 #include <astream/InputDevice.hpp>
 #include <astream/Texture2D.hpp>
 
+template <typename T>
+concept IsGameWorld =
+    requires(T world, int clientId, const InputDevice &input, float dt) {
+      { world.processPlayerInput(clientId, input) } -> std::same_as<void>;
+      { world.globalUpdate(dt) } -> std::same_as<void>;
+    };
+
+template <typename Session, typename World>
+concept IsConnectionSession =
+    requires(Session s, int clientId, int w, int h, World &world,
+             const World &const_world, const InputDevice &input,
+             Texture2D<char> &buf) {
+      { s.init(clientId, w, h, world) } -> std::same_as<void>;
+      { s.onDisconnect(world) } -> std::same_as<void>;
+      { s.update(clientId, input, world) } -> std::same_as<void>;
+      { s.render(buf, const_world) } -> std::same_as<void>;
+    };
+
 // =============================================================================
 // zlibによる圧縮送信ヘルパー (引数の型キャストをOSに合わせて調整)
 // =============================================================================
@@ -96,7 +114,9 @@ inline int send_engine_frame_compressed(int sock, const char *raw_data,
 // =============================================================================
 // エンジンコアクラス
 // =============================================================================
-template <typename WorldType, typename SessionType> class Engine {
+template <typename WorldType, typename SessionType>
+  requires IsGameWorld<WorldType> && IsConnectionSession<SessionType, WorldType>
+class Engine {
 private:
   int m_port;
   int m_serverSock = -1;

@@ -1,6 +1,7 @@
 #pragma once
 #include <astream/InputDevice.hpp>
 
+// これを継承してもいいし，ちゃんとメゾットを満たしてさえいれば継承する必要はない
 class GameWorld {
 public:
   virtual ~GameWorld() = default;
