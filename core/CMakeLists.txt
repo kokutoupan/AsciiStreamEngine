@@ -3,6 +3,6 @@ add_library(astream_core STATIC
 )
 
 if(WIN32)
-    target_link_libraries(astream_core PRIVATE winmm)
+  target_link_libraries(astream_core PRIVATE winmm)
 endif()
 target_include_directories(astream_core PUBLIC ${CMAKE_CURRENT_SOURCE_DIR}/include)

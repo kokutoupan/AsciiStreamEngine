@@ -105,5 +105,6 @@ function(astream_compile_assets TARGET_NAME)
 endfunction()
 
 add_subdirectory(core)
+add_subdirectory(util)
 add_subdirectory(client)
 add_subdirectory(examples)

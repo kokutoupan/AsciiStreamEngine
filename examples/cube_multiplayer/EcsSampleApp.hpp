@@ -8,68 +8,220 @@
 #include <limits>
 #include <memory>
 #include <ranges>
+#include <thread>
 #include <unordered_map>
 #include <vector>
 
 #include <astream/ConnectionContext.hpp>
 #include <astream/GameWorld.hpp>
 #include <astream/GraphicsDevice.hpp>
-#include <astream/MeshUtil.hpp>
-#include <astream/Registry.hpp>
+#include <astream/MeshView.hpp>
 #include <astream/Texture2D.hpp>
-#include <astream/TextureUtil.hpp>
+#include <astream/Transform.hpp>
 #include <astream/shaders/DefaultShaders.hpp>
 
-#include <astream/PhysicsUtil.hpp>
+#include <astream/util/MeshUtil.hpp>
+#include <astream/util/TextureUtil.hpp>
 
 #include <glm/glm.hpp>
 #include <glm/gtc/matrix_transform.hpp>
+#include <glm/gtc/quaternion.hpp>
+
+#include <entt/entt.hpp>
+
+// Jolt Physics Headers
+#include <Jolt/Jolt.h>
+
+#include <Jolt/Core/Factory.h>
+#include <Jolt/Core/JobSystemThreadPool.h>
+#include <Jolt/Core/TempAllocator.h>
+#include <Jolt/Physics/Body/BodyActivationListener.h>
+#include <Jolt/Physics/Body/BodyCreationSettings.h>
+#include <Jolt/Physics/Collision/CastResult.h>
+#include <Jolt/Physics/Collision/RayCast.h>
+#include <Jolt/Physics/Collision/Shape/BoxShape.h>
+#include <Jolt/Physics/PhysicsSettings.h>
+#include <Jolt/Physics/PhysicsSystem.h>
+#include <Jolt/RegisterTypes.h>
 
 #include "cube.hpp" // cube.obj から自動生成
 
-/**
- * @brief 円軌道運動に必要なパラメータを保持するコンポーネント
- */
-struct OrbitComponent {
-  glm::vec3 center;   ///< 円軌道の中心座標
-  float radius;       ///< 軌道半径
-  float speed;        ///< 周回速度
-  float ticks = 0.0f; ///< エンティティ個別の時間経過（バグの修正）
-};
+using astream::MeshView;
+using astream::Transform;
 
-// プレイヤーの入力状態（あるいはコマンド）を保持するコンポーネント
-struct PlayerInputComponent {
-  int clientId;
-  glm::vec3 move_intention{0.0f};
-  float yaw = 0.0f;
-  float pitch = 0.0f;
-  bool action_trigger_space = false;
-  bool action_trigger_r = false;
-};
+#include "EcsPhysics.hpp"
 
 // =============================================================================
-// 1. 世界の共通状態を統括する GameWorld 実装
+// EcsGameWorld 実装 (EnTT + Jolt Physics)
 // =============================================================================
-
-/**
- * @brief ハイブリッドECS (Registry)
- * を内包し、エンティティの生成とシステム実行を管理するゲームワールド。
- */
 class EcsGameWorld : public GameWorld {
 private:
-  Registry m_registry; ///< ECSのレジストリ実体
+  entt::registry m_registry;
+
+  // Jolt 物理エンジンのコンポーネント
+  JPH::TempAllocatorImpl *m_tempAllocator = nullptr;
+  JPH::JobSystemThreadPool *m_jobSystem = nullptr;
+  BPLayerInterfaceImpl m_bpLayerInterface;
+  ObjectVsBroadPhaseLayerFilterImpl m_objVsBpFilter;
+  ObjectLayerPairFilterImpl m_objVsObjFilter;
+  JPH::PhysicsSystem m_physicsSystem;
+
+  JPH::ShapeRefC m_cubeShape;
+  JPH::ShapeRefC m_floorShape;
+
+  std::vector<entt::entity> deferred_destroy_queue;
 
 public:
-  std::unordered_map<int, EntityId> player_entities; // ClientID -> EntityId
+  std::unordered_map<int, entt::entity> player_entities;
   bool m_resetRequested = false;
+
+  static constexpr float GROUND_Y = -2.0f;
+
+  EcsGameWorld() {
+    std::cout << "[EnTT + Jolt Physics] Initializing EcsGameWorld..."
+              << std::endl;
+
+    // Jolt 物理エンジンのグローバル初期化
+    static bool joltInitialized = false;
+    if (!joltInitialized) {
+      JPH::RegisterDefaultAllocator();
+      JPH::Factory::sInstance = new JPH::Factory();
+      JPH::RegisterTypes();
+      joltInitialized = true;
+    }
+
+    m_tempAllocator = new JPH::TempAllocatorImpl(10 * 1024 * 1024);
+    m_jobSystem = new JPH::JobSystemThreadPool(
+        JPH::cMaxPhysicsJobs, JPH::cMaxPhysicsBarriers,
+        std::thread::hardware_concurrency() - 1);
+
+    const JPH::uint cMaxBodies = 1024;
+    const JPH::uint cNumBodyMutexes = 0;
+    const JPH::uint cMaxBodyPairs = 1024;
+    const JPH::uint cMaxContactConstraints = 1024;
+
+    m_physicsSystem.Init(cMaxBodies, cNumBodyMutexes, cMaxBodyPairs,
+                         cMaxContactConstraints, m_bpLayerInterface,
+                         m_objVsBpFilter, m_objVsObjFilter);
+
+    // 重力の設定 (-9.8 m/s^2)
+    m_physicsSystem.SetGravity(JPH::Vec3(0.0f, -9.8f, 0.0f));
+
+    // 形状アセットの事前ロード
+    JPH::BoxShapeSettings floorShapeSettings(JPH::Vec3(15.0f, 0.1f, 17.5f));
+    floorShapeSettings.SetEmbedded();
+    m_floorShape = floorShapeSettings.Create().Get();
+
+    JPH::BoxShapeSettings cubeShapeSettings(JPH::Vec3(0.5f, 0.5f, 0.5f));
+    cubeShapeSettings.SetEmbedded();
+    m_cubeShape = cubeShapeSettings.Create().Get();
+
+    // 床 (静的コライダー) のセットアップ
+    setupFloor();
+
+    // 動的オブジェクトの生成
+    create_entitys();
+  }
+
+  ~EcsGameWorld() override {
+    // 物理剛体の削除
+    auto &bodyInterface = m_physicsSystem.GetBodyInterface();
+    m_registry.view<PhysicsBodyComponent>().each(
+        [&](auto entity, auto &bodyComp) {
+          if (!bodyComp.bodyId.IsInvalid()) {
+            bodyInterface.RemoveBody(bodyComp.bodyId);
+            bodyInterface.DestroyBody(bodyComp.bodyId);
+          }
+        });
+
+    delete m_tempAllocator;
+    delete m_jobSystem;
+  }
+
+  void setupFloor() {
+    auto &bodyInterface = m_physicsSystem.GetBodyInterface();
+    JPH::BodyCreationSettings floorSettings(
+        m_floorShape, JPH::RVec3(0.0f, GROUND_Y, -7.5f), JPH::Quat::sIdentity(),
+        JPH::EMotionType::Static, Layers::NON_MOVING);
+    floorSettings.mRestitution = 1.0f; // バウンドさせるための高反発設定
+    floorSettings.mFriction = 0.2f;
+
+    JPH::Body *floorBody = bodyInterface.CreateBody(floorSettings);
+    bodyInterface.AddBody(floorBody->GetID(), JPH::EActivation::DontActivate);
+
+    auto floorEntity = m_registry.create();
+    m_registry.emplace<Transform>(
+        floorEntity, Transform{.position = glm::vec3(0.0f, GROUND_Y, -7.5f)});
+    m_registry.emplace<MeshView>(floorEntity, MeshView{});
+    m_registry.emplace<ObjectTypeComponent>(
+        floorEntity, ObjectTypeComponent{ObjectType::Ground});
+    m_registry.emplace<PhysicsBodyComponent>(
+        floorEntity, PhysicsBodyComponent{floorBody->GetID()});
+  }
+
+  void create_entitys() {
+    static constexpr auto cube_vertices =
+        MeshUtil::create_static_vertices<cube_vertex_count>(
+            cube_positions, cube_normals, cube_texcoords);
+    static constexpr auto cube_index =
+        MeshUtil::create_static_indices<cube_index_count>(cube_indices);
+    MeshView cubeVertexComp{.vertices = std::as_bytes(std::span(cube_vertices)),
+                            .indices = cube_index,
+                            .stride = sizeof(Shaders::DefaultVertex)};
+
+    auto &bodyInterface = m_physicsSystem.GetBodyInterface();
+
+    // 1. 通常キューブを30個生成 (物理エンジンに登録)
+    for (int i = 0; i < 30; ++i) {
+      float x = static_cast<float>((i % 6) - 3) * 3.0f;
+      float z = static_cast<float>((i / 6) - 2) * -4.0f;
+      float initialY = 4.0f + static_cast<float>(i % 3) * 2.0f;
+
+      JPH::BodyCreationSettings cubeSettings(
+          m_cubeShape, JPH::RVec3(x, initialY, z), JPH::Quat::sIdentity(),
+          JPH::EMotionType::Dynamic, Layers::MOVING);
+      cubeSettings.mRestitution = 1.0f; // 反発係数1.0
+      cubeSettings.mFriction = 0.2f;
+
+      JPH::Body *cubeBody = bodyInterface.CreateBody(cubeSettings);
+      bodyInterface.AddBody(cubeBody->GetID(), JPH::EActivation::Activate);
+
+      auto new_id = m_registry.create();
+      m_registry.emplace<Transform>(
+          new_id, Transform{.position = glm::vec3(x, initialY, z),
+                            .rotation = glm::vec3(0.0f),
+                            .scale = glm::vec3(0.5f)});
+      m_registry.emplace<MeshView>(new_id, cubeVertexComp);
+      m_registry.emplace<ObjectTypeComponent>(
+          new_id, ObjectTypeComponent{ObjectType::NormalPhysics});
+      m_registry.emplace<PhysicsBodyComponent>(
+          new_id, PhysicsBodyComponent{cubeBody->GetID()});
+      m_registry.emplace<GravityTag>(new_id);
+    }
+
+    // 2. 特殊な軌道運動を行うモデルを1個生成
+    Transform specialTrans{.position = glm::vec3(0.0f, 0.0f, 0.0f),
+                           .rotation = glm::vec3(0.0f),
+                           .scale = glm::vec3(1.5f)};
+
+    auto orbit_id = m_registry.create();
+    m_registry.emplace<Transform>(orbit_id, specialTrans);
+    m_registry.emplace<MeshView>(orbit_id, cubeVertexComp);
+    m_registry.emplace<ObjectTypeComponent>(
+        orbit_id, ObjectTypeComponent{ObjectType::SpecialOrbit});
+    m_registry.emplace<OrbitComponent>(
+        orbit_id, OrbitComponent{glm::vec3(0.0f, 3.0f, -5.0f), 6.0f, 1.0f});
+  }
 
   void onPlayerConnect(int clientId) {
     Transform trans{.position = glm::vec3(0.0f, 10.0f, 12.0f),
                     .rotation = glm::vec3(0.0f),
                     .scale = glm::vec3(1.0f)};
-    auto id = m_registry.create_entity(trans, Velocity{}, Acceleration{},
-                                       VertexComponent{}, 0, nullptr);
-    m_registry.add_component<PlayerInputComponent>(
+    auto id = m_registry.create();
+    m_registry.emplace<Transform>(id, trans);
+    m_registry.emplace<ObjectTypeComponent>(
+        id, ObjectTypeComponent{ObjectType::Player});
+    m_registry.emplace<PlayerInputComponent>(
         id, PlayerInputComponent{
                 .clientId = clientId, .yaw = -90.0f, .pitch = -25.0f});
     player_entities[clientId] = id;
@@ -78,261 +230,142 @@ public:
   void onPlayerDisconnect(int clientId) {
     auto it = player_entities.find(clientId);
     if (it != player_entities.end()) {
-      m_registry.destroy_entity(it->second);
+      m_registry.destroy(it->second);
       player_entities.erase(it);
     }
   }
 
-  // システムが処理対象を識別するためのタグ定義
-  static constexpr std::uint64_t TAG_NORMAL_PHYSICS =
-      1; ///< 通常の物理オブジェクト用タグ
-  static constexpr std::uint64_t TAG_SPECIAL_ORBIT =
-      2; ///< 特殊な円軌道オブジェクト用タグ
-  static constexpr std::uint64_t TAG_GROUND =
-      3; ///< 床（静的コライダー）識別用タグ
-  static constexpr std::uint64_t OBJECT_TYPE_MASK = 0x3;
-
-  // 床の高さの基準
-  static constexpr float GROUND_Y = -2.0f;
-
-  struct GravityTag {};
-
-  void create_entitys() {
-    // ---------------------------------------------------------------------
-    // アセット準備: 立方体メッシュデータの作成
-    // ---------------------------------------------------------------------
-
-    // 動的な場合の例
-    // auto cube_vertex = MeshUtil::create_vertices(
-    //     cube_vertex_count, cube_positions, cube_normals, cube_texcoords);
-    // ;
-    // auto cube_index = MeshUtil::create_indices(cube_index_count,
-    // cube_indices);
-    //
-    // std::shared_ptr<VectorMeshHolder<Shaders::DefaultVertex>> mesh_asset =
-    //     std::make_shared<VectorMeshHolder<Shaders::DefaultVertex>>(
-    //         VectorMeshHolder<Shaders::DefaultVertex>{cube_vertex,
-    //         cube_index});
-    //
-    // VertexComponent cubeVertexComp{
-    //     .vertices = std::as_bytes(std::span(mesh_asset->vertices)),
-    //     .indices = mesh_asset->indices,
-    //     .stride = sizeof(Shaders::DefaultVertex),
-    //     .life_support = mesh_asset};
-
-    static constexpr auto cube_vertices =
-        MeshUtil::create_static_vertices<cube_vertex_count>(
-            cube_positions, cube_normals, cube_texcoords);
-    static constexpr auto cube_index =
-        MeshUtil::create_static_indices<cube_index_count>(cube_indices);
-    VertexComponent cubeVertexComp{.vertices =
-                                       std::as_bytes(std::span(cube_vertices)),
-                                   .indices = cube_index,
-                                   .stride = sizeof(Shaders::DefaultVertex)};
-
-    // ---------------------------------------------------------------------
-    // エンティティの生成
-    // ---------------------------------------------------------------------
-
-    // 1. 通常キューブを30個生成 (コライダーを付与)
-    for (int i = 0; i < 30; ++i) {
-      float x = static_cast<float>((i % 6) - 3) * 3.0f;
-      float z = static_cast<float>((i / 6) - 2) * -4.0f;
-      float initialY = 4.0f + static_cast<float>(i % 3) *
-                                  2.0f; // 初期高度を散らしてカオス感を出す
-
-      Transform trans{.position = glm::vec3(x, initialY, z),
-                      .rotation = glm::vec3(0.0f),
-                      .scale = glm::vec3(0.5f)};
-
-      // スケール0.5fに合わせたAABBハーフサイズ
-      Collider cubeCollider{.centerOffset = glm::vec3(0.0f),
-                            .halfExtents = glm::vec3(0.5f)};
-
-      const auto new_id = m_registry.create_entity(
-          trans, Velocity{}, Acceleration{}, cubeVertexComp, TAG_NORMAL_PHYSICS,
-          nullptr, cubeCollider);
-      m_registry.add_component<GravityTag>(new_id, GravityTag{});
-    }
-
-    // 2. 特殊な軌道運動を行うモデルを1個生成
-    Transform specialTrans{.position = glm::vec3(0.0f, 0.0f, 0.0f),
-                           .rotation = glm::vec3(0.0f),
-                           .scale = glm::vec3(1.5f)};
-
-    // 円軌道ビヘイビアを生成 (中心: (0, 3, -5), 半径: 6.0, 速度: 1.0)
-    const auto orbit_id =
-        m_registry.create_entity(specialTrans, Velocity{}, Acceleration{},
-                                 cubeVertexComp, TAG_SPECIAL_ORBIT);
-    m_registry.add_component<OrbitComponent>(
-        orbit_id, OrbitComponent{glm::vec3(0.0f, 3.0f, -5.0f), 6.0f, 1.0f});
-  }
-
-  EcsGameWorld() {
-    std::cout << "[ECS Engine] Initializing EcsGameWorld..." << std::endl;
-
-    // ---------------------------------------------------------------------
-    // デフォルトシステムの登録 (物理移動と衝突判定)
-    // ---------------------------------------------------------------------
-    m_registry.add_default_systems();
-
-    // 2. 外部重力システム: TAG_NORMAL_PHYSICS のみに重力を適用
-    m_registry.add_system([](Registry &reg, float dt) {
-      glm::vec3 gravity(0.0f, -9.8f, 0.0f);
-      for (auto &&[tag, accel] : reg.view<GravityTag, Acceleration>()) {
-        accel.value = gravity;
-      }
-    });
-
-    // 3. プレイヤー入力処理システム
-    m_registry.add_system([this](Registry &reg, float dt) {
-      for (auto &&[inputComp, trans] :
-           reg.view<PlayerInputComponent, Transform>()) {
-        // 視線ベクトルの計算
-        glm::vec3 front;
-        front.x = cos(glm::radians(inputComp.yaw)) *
-                  cos(glm::radians(inputComp.pitch));
-        front.y = sin(glm::radians(inputComp.pitch));
-        front.z = sin(glm::radians(inputComp.yaw)) *
-                  cos(glm::radians(inputComp.pitch));
-        glm::vec3 cameraFront = glm::normalize(front);
-        glm::vec3 cameraRight = glm::normalize(
-            glm::cross(cameraFront, glm::vec3(0.0f, 1.0f, 0.0f)));
-
-        // 移動の適用
-        float camSpeed = 5.0f * dt;
-        if (glm::length(inputComp.move_intention) > 0.0f) {
-          trans.position +=
-              cameraRight * (inputComp.move_intention.x * camSpeed);
-          trans.position += glm::vec3(0.0f, 1.0f, 0.0f) *
-                            (inputComp.move_intention.y * camSpeed);
-          trans.position +=
-              cameraFront * (inputComp.move_intention.z * camSpeed);
-        }
-
-        // スペースキーでレイキャスト＆破壊
-        if (inputComp.action_trigger_space) {
-          auto hit = raycast_now(reg, trans.position, cameraFront, 100.0f);
-          if (hit.hit && reg.is_valid(hit.entity)) {
-            std::uint64_t tag = reg.get_component<std::uint64_t>(hit.entity);
-            if ((tag & EcsGameWorld::OBJECT_TYPE_MASK) ==
-                EcsGameWorld::TAG_NORMAL_PHYSICS) {
-              reg.destroy_entity_deferred(hit.entity);
-            }
-          }
-        }
-
-        // Rキーでリセットリクエスト
-        if (inputComp.action_trigger_r) {
-          this->m_resetRequested = true;
-        }
-      }
-    });
-
-    // ---------------------------------------------------------------------
-    // 【接触応答システム】
-    // 標準判定が埋めた hitEntities
-    // から床(TAG_GROUND)との接触を検知してVelocityを反転
-    // ---------------------------------------------------------------------
-    m_registry.add_system([](Registry &reg, float dt) {
-      for (auto &&[tag, collider, vec, acc] :
-           reg.view<GravityTag, Collider, Velocity, Acceleration>()) {
-
-        if (collider.hitEntities.empty())
-          continue;
-
-        for (std::uint32_t hitId : collider.hitEntities) {
-          // 衝突相手のタグを安全に確認
-          if (reg.is_valid(hitId)) {
-            std::uint64_t hitTag = reg.get_component<std::uint64_t>(hitId);
-
-            // 相手が「床」であり、自分が現在落下中の場合のみ反発（反発係数1.0）
-            if ((hitTag & OBJECT_TYPE_MASK) == TAG_GROUND &&
-                vec.value.y < 0.0f) {
-              acc.value = glm::vec3(0.0f);
-              vec.value.y = std::abs(vec.value.y) * 1.0f;
-              break; // 床との衝突処理が確定したらこのオブジェクトのチェックを抜ける
-            }
-          }
-        }
-      }
-    });
-
-    m_registry.add_system([](Registry &reg, float dt) {
-      // OrbitComponent と Transform を持つエンティティだけを最速走査
-      for (auto &&[orbit, trans] : reg.view<OrbitComponent, Transform>()) {
-
-        orbit.ticks += dt;
-
-        // XZ平面上での円軌道座標を計算
-        trans.position.x =
-            orbit.center.x + std::cos(orbit.ticks * orbit.speed) * orbit.radius;
-        trans.position.z =
-            orbit.center.z + std::sin(orbit.ticks * orbit.speed) * orbit.radius;
-        trans.position.y = orbit.center.y;
-
-        // 回転の更新
-        trans.rotation.y -= 0.05f;
-        trans.rotation.x = 0.0f;
-        trans.rotation.z = 0.0f;
-      }
-    });
-
-    Transform planeTrans{.position = glm::vec3(0.0f, GROUND_Y, -7.5f)};
-    Velocity planeVel{};
-    VertexComponent
-        planeVertexComp{}; // 描画はセッション側で静的におこなうため空でOK
-    Collider planeCollider{
-        .centerOffset = glm::vec3(0.0f),
-        .halfExtents = glm::vec3(
-            15.0f, 0.1f, 17.5f) // 幅30, 厚み0.2, 奥行き35 の巨大な壁を床化
-    };
-    // 床として世界に固定配置
-    m_registry.create_entity(planeTrans, planeVel, Acceleration{},
-                             planeVertexComp, TAG_GROUND, nullptr,
-                             planeCollider);
-
-    create_entitys();
-  }
-
   void processPlayerInput(int clientId, const InputDevice &input) override {}
 
-  /**
-   * @brief
-   * ワールドの更新処理。登録されたシステムを一括アップデートします。
-   */
   void globalUpdate(float delta_time) override {
-    m_registry.update(delta_time);
+    // 1. Jolt 物理演算の更新
+    m_physicsSystem.Update(delta_time, 1, m_tempAllocator, m_jobSystem);
+
+    // 2. Jolt 剛体結果から Transform への同期
+    auto &bodyInterface = m_physicsSystem.GetBodyInterface();
+    m_registry.view<PhysicsBodyComponent, Transform>().each(
+        [&](auto entity, auto &bodyComp, auto &trans) {
+          if (!bodyComp.bodyId.IsInvalid() &&
+              bodyInterface.IsActive(bodyComp.bodyId)) {
+            JPH::RVec3 pos =
+                bodyInterface.GetCenterOfMassPosition(bodyComp.bodyId);
+            JPH::Quat rot = bodyInterface.GetRotation(bodyComp.bodyId);
+            trans.position = glm::vec3(pos.GetX(), pos.GetY(), pos.GetZ());
+            glm::quat q(rot.GetW(), rot.GetX(), rot.GetY(), rot.GetZ());
+            trans.rotation = glm::eulerAngles(q);
+          }
+        });
+
+    // 3. プレイヤー入力処理システム
+    m_registry.view<PlayerInputComponent, Transform>().each([&](auto entity,
+                                                                auto &inputComp,
+                                                                auto &trans) {
+      glm::vec3 front;
+      front.x =
+          cos(glm::radians(inputComp.yaw)) * cos(glm::radians(inputComp.pitch));
+      front.y = sin(glm::radians(inputComp.pitch));
+      front.z =
+          sin(glm::radians(inputComp.yaw)) * cos(glm::radians(inputComp.pitch));
+      glm::vec3 cameraFront = glm::normalize(front);
+      glm::vec3 cameraRight =
+          glm::normalize(glm::cross(cameraFront, glm::vec3(0.0f, 1.0f, 0.0f)));
+
+      float camSpeed = 5.0f * delta_time;
+      if (glm::length(inputComp.move_intention) > 0.0f) {
+        trans.position += cameraRight * (inputComp.move_intention.x * camSpeed);
+        trans.position += glm::vec3(0.0f, 1.0f, 0.0f) *
+                          (inputComp.move_intention.y * camSpeed);
+        trans.position += cameraFront * (inputComp.move_intention.z * camSpeed);
+      }
+
+      // スペースキーでレイキャスト＆破壊
+      if (inputComp.action_trigger_space) {
+        JPH::RRayCast ray{
+            JPH::RVec3(trans.position.x, trans.position.y, trans.position.z),
+            JPH::Vec3(cameraFront.x * 100.0f, cameraFront.y * 100.0f,
+                      cameraFront.z * 100.0f)};
+        JPH::RayCastResult hit;
+        if (m_physicsSystem.GetNarrowPhaseQuery().CastRay(ray, hit)) {
+          JPH::BodyID hitBodyId = hit.mBodyID;
+          entt::entity targetEntity = entt::null;
+          m_registry.view<PhysicsBodyComponent>().each(
+              [&](auto ent, auto &bComp) {
+                if (bComp.bodyId == hitBodyId) {
+                  targetEntity = ent;
+                }
+              });
+          if (targetEntity != entt::null && m_registry.valid(targetEntity)) {
+            auto &typeComp = m_registry.get<ObjectTypeComponent>(targetEntity);
+            if (typeComp.type == ObjectType::NormalPhysics) {
+              deferred_destroy_queue.push_back(targetEntity);
+            }
+          }
+        }
+      }
+
+      if (inputComp.action_trigger_r) {
+        this->m_resetRequested = true;
+      }
+    });
+
+    // 4. OrbitComponent更新システム
+    m_registry.view<OrbitComponent, Transform>().each(
+        [&](auto entity, auto &orbit, auto &trans) {
+          orbit.ticks += delta_time;
+          trans.position.x = orbit.center.x +
+                             std::cos(orbit.ticks * orbit.speed) * orbit.radius;
+          trans.position.z = orbit.center.z +
+                             std::sin(orbit.ticks * orbit.speed) * orbit.radius;
+          trans.position.y = orbit.center.y;
+          trans.rotation.y -= 0.05f;
+          trans.rotation.x = 0.0f;
+          trans.rotation.z = 0.0f;
+        });
+
+    // 遅延破壊の処理
+    for (auto ent : deferred_destroy_queue) {
+      if (m_registry.valid(ent)) {
+        if (m_registry.all_of<PhysicsBodyComponent>(ent)) {
+          auto &bComp = m_registry.get<PhysicsBodyComponent>(ent);
+          if (!bComp.bodyId.IsInvalid()) {
+            bodyInterface.RemoveBody(bComp.bodyId);
+            bodyInterface.DestroyBody(bComp.bodyId);
+          }
+        }
+        m_registry.destroy(ent);
+      }
+    }
+    deferred_destroy_queue.clear();
+
     if (m_resetRequested) {
       resetWorld();
       m_resetRequested = false;
     }
   }
 
-  /**
-   * @brief ECSレジストリへの参照を取得します。
-   */
-  Registry &get_registry() { return m_registry; }
-  const Registry &get_registry() const { return m_registry; }
+  entt::registry &get_registry() { return m_registry; }
+  const entt::registry &get_registry() const { return m_registry; }
 
-  /**
-   * @brief ワールドをリセットし、通常キューブを再生成します。
-   */
   void resetWorld() {
-    // 1. TAG_NORMAL_PHYSICS のエンティティをすべて集める
-    std::vector<EntityId> to_destroy;
-    auto &tags = m_registry.get_raw_data<std::uint64_t>();
-    auto &entities = m_registry.get_raw_entities<std::uint64_t>();
-    for (std::size_t i = 0; i < tags.size(); ++i) {
-      if ((tags[i] & OBJECT_TYPE_MASK) == TAG_NORMAL_PHYSICS ||
-          (tags[i] & OBJECT_TYPE_MASK) == TAG_SPECIAL_ORBIT) {
-        to_destroy.push_back(entities[i]);
-      }
-    }
+    auto &bodyInterface = m_physicsSystem.GetBodyInterface();
+    std::vector<entt::entity> to_destroy;
+    m_registry.view<ObjectTypeComponent>().each(
+        [&](auto entity, auto &typeComp) {
+          if (typeComp.type == ObjectType::NormalPhysics ||
+              typeComp.type == ObjectType::SpecialOrbit) {
+            to_destroy.push_back(entity);
+          }
+        });
 
-    // 2. 破壊する
-    for (auto id : to_destroy) {
-      m_registry.destroy_entity(id);
+    for (auto ent : to_destroy) {
+      if (m_registry.all_of<PhysicsBodyComponent>(ent)) {
+        auto &bComp = m_registry.get<PhysicsBodyComponent>(ent);
+        if (!bComp.bodyId.IsInvalid()) {
+          bodyInterface.RemoveBody(bComp.bodyId);
+          bodyInterface.DestroyBody(bComp.bodyId);
+        }
+      }
+      m_registry.destroy(ent);
     }
 
     create_entitys();
@@ -340,13 +373,8 @@ public:
 };
 
 // =============================================================================
-// 3. 各クライアントごとの個別描画セッション
+// 各クライアントごとの個別描画セッション (EnTT への移行対応)
 // =============================================================================
-
-/**
- * @brief
- * クライアントごとのカメラ制御、インプット処理、遅延シェーディングおよび描画パイプラインを処理するセッションクラス。
- */
 class EcsPlayerSession : public ConnectionContext<EcsGameWorld> {
 private:
   int m_clientId = -1;
@@ -390,7 +418,6 @@ public:
     h = height;
     aspect = (float)w / (float)h * 0.5f;
 
-    float pi_half = 3.14159265f / 2.0f;
     glm::mat4 lightView =
         glm::lookAt(lightDir * 20.0f, glm::vec3(0, 0, -5), glm::vec3(0, 1, 0));
     glm::mat4 lightProj =
@@ -414,24 +441,19 @@ public:
     world.onPlayerDisconnect(m_clientId);
   }
 
-  /**
-   * @brief
-   * 入力デバイスの入力状況に応じてカメラの位置と視線を移動・調整します。
-   */
   void update(int clientId, const InputDevice &input,
               EcsGameWorld &world) override {
     auto it = world.player_entities.find(clientId);
     if (it == world.player_entities.end()) {
       return;
     }
-    EntityId playerEntity = it->second;
+    entt::entity playerEntity = it->second;
     auto &reg = world.get_registry();
-    if (!reg.is_valid(playerEntity))
+    if (!reg.valid(playerEntity))
       return;
 
-    auto &inputComp = reg.get_component<PlayerInputComponent>(playerEntity);
+    auto &inputComp = reg.get<PlayerInputComponent>(playerEntity);
 
-    // J/L/I/K キーで視線回転
     float lookSpeed = 90.0f * input.getDeltaTime();
     if (input.getKey(Key::j) || input.getKey(Key::J))
       inputComp.yaw -= lookSpeed;
@@ -447,7 +469,6 @@ public:
     if (inputComp.pitch < -89.0f)
       inputComp.pitch = -89.0f;
 
-    // W/A/S/D/Q/E キーで移動インテンションを設定
     glm::vec3 move_intention{0.0f};
     if (input.getKey(Key::w) || input.getKey(Key::W))
       move_intention.z += 1.0f;
@@ -463,16 +484,11 @@ public:
       move_intention.y -= 1.0f;
     inputComp.move_intention = move_intention;
 
-    // アクションのトリガー
     inputComp.action_trigger_space = input.getKeyDown(Key::Space);
     inputComp.action_trigger_r =
         input.getKeyDown(Key::r) || input.getKeyDown(Key::R);
   }
 
-  /**
-   * @brief
-   * 画面のレンダリング処理。シャドウマップ生成、Gバッファへの描画、ディファードライティング、UIテキスト重ね合わせを行います。
-   */
   void render(Texture2D<char> &outputTexture,
               const EcsGameWorld &world) override {
     auto renderStart = std::chrono::steady_clock::now();
@@ -495,11 +511,10 @@ public:
     const auto &reg = world.get_registry();
     auto it = world.player_entities.find(m_clientId);
     if (it != world.player_entities.end()) {
-      EntityId playerEntity = it->second;
-      if (reg.is_valid(playerEntity)) {
-        cameraPos = reg.get_component<Transform>(playerEntity).position;
-        const auto &inputComp =
-            reg.get_component<PlayerInputComponent>(playerEntity);
+      entt::entity playerEntity = it->second;
+      if (reg.valid(playerEntity)) {
+        cameraPos = reg.get<Transform>(playerEntity).position;
+        const auto &inputComp = reg.get<PlayerInputComponent>(playerEntity);
         yaw = inputComp.yaw;
         pitch = inputComp.pitch;
       }
@@ -513,9 +528,6 @@ public:
                                  glm::vec3(0.0f, 1.0f, 0.0f));
     glm::mat4 proj = glm::perspective(0.8f, aspect, 0.1f, 100.0f);
 
-    auto &transforms = reg.get_raw_data<Transform>();
-    auto &vertexComps = reg.get_raw_data<VertexComponent>();
-
     // 1. シャドウマップ生成パス
     auto shadowPass =
         device.create_rasterize_pass<Shaders::DefaultVertex, glm::vec3, float>(
@@ -525,7 +537,11 @@ public:
         planeVertices, planeIndices,
         std::bind_back(Shaders::shadowVS, identityModel, lightSpaceMatrix));
 
-    for (auto &&[trans, vComp] : std::views::zip(transforms, vertexComps)) {
+    // EnTT のビュー走査
+    auto enttView = reg.view<const Transform, const MeshView>();
+    for (auto entity : enttView) {
+      const auto &trans = enttView.get<const Transform>(entity);
+      const auto &vComp = enttView.get<const MeshView>(entity);
       if (vComp.vertices.empty())
         continue;
       std::span<const Shaders::DefaultVertex> vertices(
@@ -550,7 +566,9 @@ public:
           worldPosBuffer->at(x, y) = in.worldPos;
         });
 
-    for (auto &&[trans, vComp] : std::views::zip(transforms, vertexComps)) {
+    for (auto entity : enttView) {
+      const auto &trans = enttView.get<const Transform>(entity);
+      const auto &vComp = enttView.get<const MeshView>(entity);
       if (vComp.vertices.empty())
         continue;
       glm::mat4 model = trans.to_matrix();
@@ -584,11 +602,12 @@ public:
             .count();
 
     // 4. デバッグ情報のHUDテキスト描画
-    std::string debugStr = std::format(
-        "Hybrid ECS | Total Entities: {}\nFPS: "
-        "{:.1f} ({:.2f} ms)\nRender: {:.2f} ms",
-        transforms.size(), (frameDeltaMs > 0.0 ? 1000.0 / frameDeltaMs : 0.0),
-        frameDeltaMs, renderTimeMs);
+    std::string debugStr =
+        std::format("EnTT+Jolt ECS | Total Entities: {}\nFPS: "
+                    "{:.1f} ({:.2f} ms)\nRender: {:.2f} ms",
+                    reg.view<Transform>().size(),
+                    (frameDeltaMs > 0.0 ? 1000.0 / frameDeltaMs : 0.0),
+                    frameDeltaMs, renderTimeMs);
 
     Texture2D<char> textTex = TextureUtil::strToTexture(debugStr, ' ');
     TextureUtil::blit_texture(outputTexture, textTex, 0, 0);
