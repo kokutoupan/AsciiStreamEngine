@@ -49,6 +49,11 @@ cmake --build build
 - **W, A, S, D キー**: 自分自身のカメラ視点を移動（自分だけのローカル視点）
 - **Space キー**: キューブの回転角を一斉リセット
 
+## Licenses
+
+- [Project License (MIT)](LICENSE)
+- [Third-Party Licenses](THIRD_PARTY_LICENSES.md)
+
 ---
 
 まだ開発中のため、内部APIや構造は予告なく変更される可能性があります。
