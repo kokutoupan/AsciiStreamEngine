@@ -18,6 +18,10 @@ set(TARGET_HELLO_WORLD OFF CACHE INTERNAL "")
 set(TARGET_PERFORMANCE_TEST OFF CACHE INTERNAL "")
 set(TARGET_SAMPLES OFF CACHE INTERNAL "")
 
+if(MSVC)
+  set(USE_STATIC_MSVC_RUNTIME_LIBRARY OFF CACHE INTERNAL "Use static MSVC runtime library")
+endif()
+
 FetchContent_MakeAvailable(entt JoltPhysics)
 
 # ECSを用いたサンプルのビルド定義
@@ -33,8 +37,6 @@ target_link_libraries(demo_cube_multiplayer PRIVATE
     Jolt
 )
 
-# add_executable(demo_cube_multiplayer cube_multiplayer/main.cpp)
-# target_link_libraries(demo_cube_multiplayer PRIVATE astream_core astream_util ${LIBS} ZLIB::ZLIB glm::glm)
 astream_compile_assets(demo_cube_multiplayer
     "cube_multiplayer/Assets/cube.obj"
     # "cube_multiplayer/Assets/enemy.obj" (増やしたければ並べる)
