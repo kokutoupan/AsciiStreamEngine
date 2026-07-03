@@ -120,8 +120,6 @@ struct PlayerInputComponent {
   bool action_trigger_r = false;
 };
 
-struct GravityTag {};
-
 enum class ObjectType { NormalPhysics, SpecialOrbit, Ground, Player };
 
 struct ObjectTypeComponent {

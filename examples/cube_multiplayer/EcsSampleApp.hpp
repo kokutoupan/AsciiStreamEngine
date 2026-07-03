@@ -7,6 +7,7 @@
 #include <iostream>
 #include <limits>
 #include <memory>
+#include <optional>
 #include <ranges>
 #include <thread>
 #include <unordered_map>
@@ -196,7 +197,6 @@ public:
           new_id, ObjectTypeComponent{ObjectType::NormalPhysics});
       m_registry.emplace<PhysicsBodyComponent>(
           new_id, PhysicsBodyComponent{cubeBody->GetID()});
-      m_registry.emplace<GravityTag>(new_id);
     }
 
     // 2. 特殊な軌道運動を行うモデルを1個生成
@@ -382,11 +382,11 @@ private:
   float aspect = 1.0f;
 
   GraphicsDevice device;
-  std::unique_ptr<Texture2D<float>> cameraDepth;
-  std::unique_ptr<Texture2D<float>> shadowDepth;
-  std::unique_ptr<Texture2D<char>> albedoBuffer;
-  std::unique_ptr<Texture2D<glm::vec3>> normalBuffer;
-  std::unique_ptr<Texture2D<glm::vec3>> worldPosBuffer;
+  std::optional<Texture2D<float>> cameraDepth;
+  std::optional<Texture2D<float>> shadowDepth;
+  std::optional<Texture2D<char>> albedoBuffer;
+  std::optional<Texture2D<glm::vec3>> normalBuffer;
+  std::optional<Texture2D<glm::vec3>> worldPosBuffer;
 
   glm::mat4 lightSpaceMatrix;
   glm::vec3 lightDir;
@@ -424,15 +424,11 @@ public:
         glm::ortho(-15.0f * aspect, 15.0f * aspect, -15.0f, 15.0f, 0.1f, 50.0f);
     lightSpaceMatrix = lightProj * lightView;
 
-    cameraDepth = std::make_unique<Texture2D<float>>(
-        w, h, std::numeric_limits<float>::max());
-    shadowDepth = std::make_unique<Texture2D<float>>(
-        sw, sh, std::numeric_limits<float>::max());
-    albedoBuffer = std::make_unique<Texture2D<char>>(w, h, 0);
-    normalBuffer =
-        std::make_unique<Texture2D<glm::vec3>>(w, h, glm::vec3(0, 0, 0));
-    worldPosBuffer =
-        std::make_unique<Texture2D<glm::vec3>>(w, h, glm::vec3(0, 0, 0));
+    cameraDepth.emplace(w, h, std::numeric_limits<float>::max());
+    shadowDepth.emplace(sw, sh, std::numeric_limits<float>::max());
+    albedoBuffer.emplace(w, h, 0);
+    normalBuffer.emplace(w, h, glm::vec3(0, 0, 0));
+    worldPosBuffer.emplace(w, h, glm::vec3(0, 0, 0));
 
     world.onPlayerConnect(clientId);
   }
@@ -611,5 +607,9 @@ public:
 
     Texture2D<char> textTex = TextureUtil::strToTexture(debugStr, ' ');
     TextureUtil::blit_texture(outputTexture, textTex, 0, 0);
+
+    // TextureViewのサンプル
+    TextureUtil::drawText(outputTexture.view().subView(0, 3, 20, 2), 0, 0,
+                          "TextureView is good");
   }
 };

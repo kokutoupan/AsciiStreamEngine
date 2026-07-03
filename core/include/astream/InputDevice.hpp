@@ -101,6 +101,15 @@ private:
   enum class ParseState { Normal, ExpectBracket, ExpectSequence };
   ParseState parse_state = ParseState::Normal;
 
+  static constexpr size_t BUFFER_SIZE = 8;
+  static constexpr size_t BUFFER_MASK = BUFFER_SIZE - 1;
+
+  // 各フレームごとのデータしか保証しない
+  // また、Ascii8文字以上を入力はありえないはず
+  static constexpr size_t MAX_INPUT_BYTES = 8;
+  char input_buffer[MAX_INPUT_BYTES] = {0};
+  uint8_t input_len = 0; // そのフレームで書き込まれた有効なバイト数
+
 public:
   float getDeltaTime() const { return delta_time; }
   void setDeltaTime(float dt) { delta_time = dt; }
@@ -118,11 +127,16 @@ public:
            !prev_key_states[static_cast<size_t>(k)];
   }
 
+  [[nodiscard]] inline std::string_view getFrameInput() const noexcept {
+    return std::string_view(input_buffer, input_len);
+  }
+
   // server.cpp のセッションループ最末尾で呼び出す
   void nextFrame() {
     std::copy(std::begin(key_states), std::end(key_states),
               std::begin(prev_key_states));
     std::fill(std::begin(key_states), std::end(key_states), false);
+    input_len = 0;
   }
 
   // クライアントから受信した生バイトを1バイトずつストリーム解析
@@ -137,6 +151,15 @@ public:
         Key k = mapCharToKey(ch);
         if (k != Key::Unknown)
           key_states[static_cast<size_t>(k)] = true;
+
+        // ★ 英数記号限定でバッファに詰める (可視ASCII 0x20~0x7E, Enter,
+        // Backspace)
+        if ((u_ch >= 0x20 && u_ch <= 0x7E) || u_ch == '\n' || u_ch == '\r' ||
+            u_ch == 0x08 || u_ch == 0x7F) {
+          if (input_len < MAX_INPUT_BYTES) [[likely]] {
+            input_buffer[input_len++] = ch;
+          }
+        }
       }
       break;
 

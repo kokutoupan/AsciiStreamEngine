@@ -4,8 +4,6 @@
 #include <iostream>
 #include <span>
 #include <string>
-#include <thread>
-
 
 class TerminalBuffer {
 private:

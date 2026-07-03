@@ -393,7 +393,6 @@ public:
       requires IsComputeShader<ComputeShader>
     void execute(int width, int height, ComputeShader computeShader) {
 
-      // TODO: 後に#pragma omp parallel for collapse(2)
       for (int y = 0; y < height; ++y) {
         for (int x = 0; x < width; ++x) {
           computeShader(x, y);

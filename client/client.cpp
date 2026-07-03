@@ -243,7 +243,6 @@ int recv_exact(int fd, void *buf, size_t len) {
   return (int)recvd;
 }
 
-
 // =============================================================================
 // メイン関数
 // =============================================================================
@@ -345,18 +344,18 @@ int main(int argc, char *argv[]) {
   WSAPOLLFD fds[1];
   fds[0].fd = fd;
   fds[0].events = POLLIN;
-  #if !USE_ASYNC_KEY_STATE
-    // ターミナル入力版
-    std::thread input_thread([fd]() {
-      HANDLE hIn = GetStdHandle(STD_INPUT_HANDLE);
-      char buf[64];
-      DWORD bytesRead;
-      while (ReadFile(hIn, buf, sizeof(buf), &bytesRead, NULL) && bytesRead > 0) {
-        send(fd, buf, bytesRead, 0);
-      }
-    });
-    input_thread.detach(); // メインスレッドから切り離す
-  #endif
+#if !USE_ASYNC_KEY_STATE
+  // ターミナル入力版
+  std::thread input_thread([fd]() {
+    HANDLE hIn = GetStdHandle(STD_INPUT_HANDLE);
+    char buf[64];
+    DWORD bytesRead;
+    while (ReadFile(hIn, buf, sizeof(buf), &bytesRead, NULL) && bytesRead > 0) {
+      send(fd, buf, bytesRead, 0);
+    }
+  });
+  input_thread.detach(); // メインスレッドから切り離す
+#endif
 #else
   // Linux用多重化：標準入力とソケットの2つを監視
   struct pollfd fds[2];
@@ -368,16 +367,16 @@ int main(int argc, char *argv[]) {
 
   while (1) {
 #if defined(_WIN32)
-    #if USE_ASYNC_KEY_STATE
-        // win32api
-        // Engine側のInputDeviceが想定しているキーマップ(W,A,S,D,矢印キー等)をWin32非同期APIでスキャンして送信
-        // 仮想キーコード: 矢印(0x25~0x28), アルファベットはそのまま大文字
-        scan_and_send_keys(fd);
-        int ret = WSAPoll(fds, 1, 5);
-    #else
-        // --- 純粋なターミナル入力ロジック ---
-        int ret = WSAPoll(fds, 1, -1);
-    #endif
+#if USE_ASYNC_KEY_STATE
+    // win32api
+    // Engine側のInputDeviceが想定しているキーマップ(W,A,S,D,矢印キー等)をWin32非同期APIでスキャンして送信
+    // 仮想キーコード: 矢印(0x25~0x28), アルファベットはそのまま大文字
+    scan_and_send_keys(fd);
+    int ret = WSAPoll(fds, 1, 5);
+#else
+    // --- 純粋なターミナル入力ロジック ---
+    int ret = WSAPoll(fds, 1, -1);
+#endif
 
     if (ret < 0)
       break;

@@ -63,6 +63,56 @@ inline Texture2D<char> strToTexture(const std::string_view &text,
 }
 
 /**
+ * @brief 既存の Texture2D<char>
+ * に対して、自動折り返しを考慮しながら文字列を書き込む
+ * @param view 描画対象のテクスチャ参照
+ * @param startX 書き込み開始位置のX座標
+ * @param startY 書き込み開始位置のY座標
+ * @param text 描画する文字列
+ * @return 領域内にすべての文字が収まれば true、縦方向にオーバーフローしたら
+ * false
+ */
+inline bool drawText(TextureView<char> view, int startX, int startY,
+                     const std::string_view &text) noexcept {
+  int cx = startX;
+  int cy = startY;
+
+  const int texW = view.width();
+  const int texH = view.height();
+
+  for (char ch : text) {
+    // キャリッジリターン (\r) はスキップして \n に統一して処理
+    if (ch == '\r') [[unlikely]] {
+      continue;
+    }
+
+    if (ch == '\n') {
+      cy++;
+      cx = 0;
+      continue;
+    }
+
+    if (cx >= texW) {
+      cy++;
+      cx = 0;
+    }
+
+    if (cy >= texH) [[unlikely]] {
+      return false;
+    }
+
+    if (cx >= 0 && cy >= 0 && cx < texW && cy < texH) [[likely]] {
+      view[cy, cx] = ch;
+    }
+
+    cx++;
+  }
+
+  // ループ終了後、最終的な行が縦幅を超えていなければ成功
+  return cy < texH;
+}
+
+/**
  * @brief テクスチャを別のテクスチャへ等倍で合成 (Blit) する（行単位コピー版）
  * @param dst 転送先のテクスチャ (例: メインのカラーバッファ)
  * @param src 転送元のテクスチャ (例: 文字列テクスチャ)

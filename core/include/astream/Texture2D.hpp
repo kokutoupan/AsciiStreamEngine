@@ -1,7 +1,69 @@
 #pragma once
 
+#include <cassert>
 #include <cmath>
+#include <mdspan>
 #include <vector>
+
+template <typename T> class TextureView {
+public:
+  // 内部表現としての mdspan 型
+  using mdspan_type = std::mdspan<
+      T, std::extents<std::size_t, std::dynamic_extent, std::dynamic_extent>,
+      std::layout_stride>;
+
+  using mapping_type = typename mdspan_type::mapping_type;
+  using extents_type = typename mdspan_type::extents_type;
+
+private:
+  mdspan_type m_span;
+
+public:
+  constexpr TextureView() noexcept = default;
+  constexpr TextureView(mdspan_type span) noexcept : m_span(span) {}
+
+  // 生の mdspan やポインタへのアクセス
+  [[nodiscard]] constexpr mdspan_type &get() noexcept { return m_span; }
+  [[nodiscard]] constexpr const mdspan_type &get() const noexcept {
+    return m_span;
+  }
+  [[nodiscard]] constexpr T *data() noexcept { return m_span.data_handle(); }
+  [[nodiscard]] constexpr const T *data() const noexcept {
+    return m_span.data_handle();
+  }
+
+  [[nodiscard]] constexpr std::size_t width() const noexcept {
+    return m_span.extent(1);
+  }
+  [[nodiscard]] constexpr std::size_t height() const noexcept {
+    return m_span.extent(0);
+  }
+
+  // 2次元アクセス (y, x)
+  [[nodiscard]] constexpr T &operator[](std::size_t y, std::size_t x) noexcept {
+    return m_span[y, x]; // 内部の mdspan も [y, x] で呼ぶ
+  }
+
+  [[nodiscard]] constexpr const T &operator[](std::size_t y,
+                                              std::size_t x) const noexcept {
+    return m_span[y, x];
+  }
+
+  [[nodiscard]] constexpr TextureView
+  subView(std::size_t x, std::size_t y, std::size_t width,
+          std::size_t height) const noexcept {
+    assert(x + width <= this->width() && y + height <= this->height());
+
+    mdspan_type local_span = m_span;
+    T *sub_data = &local_span[y, x];
+    std::size_t orig_stride = local_span.mapping().stride(0);
+
+    auto ext = extents_type(height, width);
+    auto map = mapping_type(ext, std::array<std::size_t, 2>{orig_stride, 1});
+
+    return TextureView(mdspan_type(sub_data, map));
+  }
+};
 
 template <typename T> class Texture2D {
 private:
@@ -59,5 +121,21 @@ public:
     T s1 = s01 * (1.0f - tx) + s11 * tx;
 
     return s0 * (1.0f - ty) + s1 * ty;
+  }
+
+  [[nodiscard]] constexpr TextureView<T> view() noexcept {
+    // TextureView が公開した型をスマートに使用
+    using view_type = TextureView<T>;
+    using extents_type = typename view_type::extents_type;
+    using mapping_type = typename view_type::mapping_type;
+    using mdspan_type = typename view_type::mdspan_type;
+
+    auto ext = extents_type(static_cast<std::size_t>(getHeight()),
+                            static_cast<std::size_t>(getWidth()));
+    auto map = mapping_type(ext, std::array<std::size_t, 2>{
+                                     static_cast<std::size_t>(getWidth()), 1});
+
+    // 内部 mdspan を作ってラッパーで包んで返す
+    return view_type(mdspan_type(getData(), map));
   }
 };
