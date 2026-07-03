@@ -8,8 +8,11 @@
 #include <span>
 #include <string>
 #include <string_view>
+#include <thread>
 
 #include <astream/Texture2D.hpp>
+
+#include "./TerminalBuffer.hpp"
 
 // =============================================================================
 // OS固有のヘッダー定義とシステムコール/ネイティブAPIのマッピング
@@ -28,6 +31,13 @@ DWORD orig_console_mode;
 HANDLE hStdin, hStdout;
 // クライアント固有のウィンドウタイトルを保持する変数
 std::string g_unique_title;
+
+// 1: GetAsyncKeyState を使う方式 (同時入力可)
+// 0: ReadFile を使う純粋なターミナル方式 (別スレッド・遅延なし)
+#ifndef USE_ASYNC_KEY_STATE
+#define USE_ASYNC_KEY_STATE 1
+#endif
+
 #else
 // Linux
 #include <netdb.h>
@@ -233,61 +243,6 @@ int recv_exact(int fd, void *buf, size_t len) {
   return (int)recvd;
 }
 
-class TerminalBuffer {
-private:
-  uint8_t current_width = 0;
-  uint8_t current_height = 0;
-  std::string output_buffer;
-
-  // 1. フォーマット（\x1b[H と \n の再配置）を専門に行う非公開関数
-  void reformat(uint8_t w, uint8_t h) {
-    current_width = w;
-    current_height = h;
-
-    size_t required_size = 3 + (w * h) + h - 1;
-    output_buffer.resize(required_size);
-
-    // 制御文字の初期配置
-    output_buffer[0] = '\x1b';
-    output_buffer[1] = '[';
-    output_buffer[2] = 'H';
-
-    for (uint8_t y = 0; y < h - 1; ++y) {
-      size_t newline_pos = 3 + (y * (w + 1)) + w;
-      output_buffer[newline_pos] = '\n';
-    }
-  }
-
-public:
-  // 1. サイズ変更が必要かチェックして適宜リサイズする関数
-  void ensure_size(uint8_t w, uint8_t h) {
-    if (w != current_width || h != current_height) {
-      reformat(w, h);
-    }
-  }
-
-  // 2. 純粋にコピーして画面に出力する関数
-  void draw(std::span<const unsigned char> raw_chars) {
-    // 現在の w と h の情報を使って安全にコピー
-    char *dest_ptr = output_buffer.data() + 3;
-
-    for (uint8_t y = 0; y < current_height; ++y) {
-      const unsigned char *row_start = raw_chars.data() + (y * current_width);
-
-      // std::copy で隙間に安全に流し込む
-      std::copy(row_start, row_start + current_width, dest_ptr);
-
-      dest_ptr += current_width + 1;
-    }
-
-    // 一括出力
-    std::cout.write(output_buffer.data(), output_buffer.size());
-  }
-
-  // 必要に応じて現在のサイズを取得できるゲッター
-  uint8_t width() const { return current_width; }
-  uint8_t height() const { return current_height; }
-};
 
 // =============================================================================
 // メイン関数
@@ -390,6 +345,18 @@ int main(int argc, char *argv[]) {
   WSAPOLLFD fds[1];
   fds[0].fd = fd;
   fds[0].events = POLLIN;
+  #if !USE_ASYNC_KEY_STATE
+    // ターミナル入力版
+    std::thread input_thread([fd]() {
+      HANDLE hIn = GetStdHandle(STD_INPUT_HANDLE);
+      char buf[64];
+      DWORD bytesRead;
+      while (ReadFile(hIn, buf, sizeof(buf), &bytesRead, NULL) && bytesRead > 0) {
+        send(fd, buf, bytesRead, 0);
+      }
+    });
+    input_thread.detach(); // メインスレッドから切り離す
+  #endif
 #else
   // Linux用多重化：標準入力とソケットの2つを監視
   struct pollfd fds[2];
@@ -401,13 +368,17 @@ int main(int argc, char *argv[]) {
 
   while (1) {
 #if defined(_WIN32)
-    // --- Windows 側の入力検知ロジック ---
-    // Engine側のInputDeviceが想定しているキーマップ(W,A,S,D,矢印キー等)をWin32非同期APIでスキャンして送信
-    // 仮想キーコード: 矢印(0x25~0x28), アルファベットはそのまま大文字
-    scan_and_send_keys(fd);
+    #if USE_ASYNC_KEY_STATE
+        // win32api
+        // Engine側のInputDeviceが想定しているキーマップ(W,A,S,D,矢印キー等)をWin32非同期APIでスキャンして送信
+        // 仮想キーコード: 矢印(0x25~0x28), アルファベットはそのまま大文字
+        scan_and_send_keys(fd);
+        int ret = WSAPoll(fds, 1, 5);
+    #else
+        // --- 純粋なターミナル入力ロジック ---
+        int ret = WSAPoll(fds, 1, -1);
+    #endif
 
-    // Windows側は30FPS相当（33ms）のタイムアウトでノンブロッキングにサーバーからのパケットを監視
-    int ret = WSAPoll(fds, 1, 33);
     if (ret < 0)
       break;
 #else
