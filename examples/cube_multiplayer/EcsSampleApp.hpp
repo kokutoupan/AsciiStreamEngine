@@ -1,14 +1,11 @@
 #pragma once
 
-#include <algorithm>
 #include <chrono>
 #include <cmath>
 #include <format>
 #include <iostream>
 #include <limits>
-#include <memory>
 #include <optional>
-#include <ranges>
 #include <thread>
 #include <unordered_map>
 #include <vector>
@@ -485,7 +482,7 @@ public:
         input.getKeyDown(Key::r) || input.getKeyDown(Key::R);
   }
 
-  void render(Texture2D<char> &outputTexture,
+  void render(TextureView<char> outputTexture,
               const EcsGameWorld &world) override {
     auto renderStart = std::chrono::steady_clock::now();
     double frameDeltaMs =
@@ -527,7 +524,7 @@ public:
     // 1. シャドウマップ生成パス
     auto shadowPass =
         device.create_rasterize_pass<Shaders::DefaultVertex, glm::vec3, float>(
-            *shadowDepth);
+            shadowDepth->view());
     glm::mat4 identityModel(1.0f);
     shadowPass.draw(
         planeVertices, planeIndices,
@@ -550,8 +547,10 @@ public:
     }
 
     // 2. Gバッファ生成（ジオメトリ）パス
-    auto geometryPass = device.create_rasterize_pass<
-        Shaders::DefaultVertex, Shaders::DefaultVarying, float>(*cameraDepth);
+    auto geometryPass =
+        device.create_rasterize_pass<Shaders::DefaultVertex,
+                                     Shaders::DefaultVarying, float>(
+            cameraDepth->view());
     glm::mat4 planeMVP = proj * view * identityModel;
     geometryPass.draw(
         planeVertices, planeIndices,
@@ -587,9 +586,9 @@ public:
     auto lightingPass = device.create_compute_pass();
     lightingPass.execute(
         w, h,
-        std::bind_back(Shaders::deferredLightingCS, std::ref(outputTexture),
-                       std::cref(*albedoBuffer), std::cref(*normalBuffer),
-                       std::cref(*worldPosBuffer), std::cref(*shadowDepth),
+        std::bind_back(Shaders::deferredLightingCS, outputTexture,
+                       albedoBuffer->view(), normalBuffer->view(),
+                       worldPosBuffer->view(), shadowDepth->view(),
                        lightSpaceMatrix, lightDir, w, h));
 
     auto renderEnd = std::chrono::steady_clock::now();
@@ -609,7 +608,7 @@ public:
     TextureUtil::blit_texture(outputTexture, textTex, 0, 0);
 
     // TextureViewのサンプル
-    TextureUtil::drawText(outputTexture.view().subView(0, 3, 20, 2), 0, 0,
+    TextureUtil::drawText(outputTexture.subView(0, 3, 20, 2), 0, 0,
                           "TextureView is good");
   }
 };

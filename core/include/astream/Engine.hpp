@@ -70,7 +70,7 @@ template <typename Session, typename World>
 concept IsConnectionSession =
     requires(Session s, int clientId, int w, int h, World &world,
              const World &const_world, const InputDevice &input,
-             Texture2D<char> &buf) {
+             TextureView<char> buf) {
       { s.init(clientId, w, h, world) } -> std::same_as<void>;
       { s.onDisconnect(world) } -> std::same_as<void>;
       { s.update(clientId, input, world) } -> std::same_as<void>;
@@ -356,7 +356,7 @@ public:
             auto &session = *session_ptr;
 
             // [A] 各プレイヤー視点での描画（const world を渡す）
-            session.context->render(*session.colorBuffer, const_world);
+            session.context->render(session.colorBuffer->view(), const_world);
 
             // [B]
             // 圧縮と送信（スレッドごとに個別に実行されるため、重いcompressが並列化される）

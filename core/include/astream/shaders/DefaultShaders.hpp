@@ -68,11 +68,11 @@ inline std::pair<glm::vec4, DefaultVarying> geometryVS(const DefaultVertex &in,
  * @brief Default Compute/Pixel Shader for deferred lighting.
  * Performs shadow mapping, diffuse shading, and character palette mapping.
  */
-inline void deferredLightingCS(int x, int y, Texture2D<char> &colorBuf,
-                               const Texture2D<char> &albedoBuf,
-                               const Texture2D<glm::vec3> &normalBuf,
-                               const Texture2D<glm::vec3> &worldPosBuf,
-                               const Texture2D<float> &shadowDepth,
+inline void deferredLightingCS(int x, int y, TextureView<char> colorBuf,
+                               TextureView<const char> albedoBuf,
+                               TextureView<const glm::vec3> normalBuf,
+                               TextureView<const glm::vec3> worldPosBuf,
+                               TextureView<const float> shadowDepth,
                                const glm::mat4 &lightSpace,
                                const glm::vec3 &lightDir, int w, int h) {
   char mtl = albedoBuf.at(x, y);

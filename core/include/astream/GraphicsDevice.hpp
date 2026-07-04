@@ -45,7 +45,7 @@ public:
   template <typename InputVertex, IsVarying Varying, typename DepthT = float>
   class RasterizePass {
   private:
-    Texture2D<DepthT> &m_depthBuffer;
+    TextureView<DepthT> m_depthBuffer;
 
     // エッジ関数の内部計算用
     inline float edgeFunction(const glm::vec2 &a, const glm::vec2 &b,
@@ -54,7 +54,7 @@ public:
     }
 
   public:
-    RasterizePass(Texture2D<DepthT> &db) : m_depthBuffer(db) {}
+    RasterizePass(TextureView<DepthT> db) : m_depthBuffer(db) {}
 
     template <typename VertexShader, typename FragmentShader>
       requires IsVertexShader<VertexShader, InputVertex, Varying> &&
@@ -404,7 +404,7 @@ public:
   // --- パス生成ファクトリ関数 ---
   template <typename InputVertex, typename Varying, typename DepthT = float>
   RasterizePass<InputVertex, Varying, DepthT>
-  create_rasterize_pass(Texture2D<DepthT> &depthBuffer) {
+  create_rasterize_pass(TextureView<DepthT> depthBuffer) {
     return RasterizePass<InputVertex, Varying, DepthT>(depthBuffer);
   }
 

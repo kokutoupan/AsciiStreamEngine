@@ -100,7 +100,7 @@ int main() {
     // ==========================================
     auto shadowPass =
         device.create_rasterize_pass<Shaders::DefaultVertex, glm::vec3, float>(
-            shadowDepth);
+            shadowDepth.view());
 
     currentModel = glm::mat4(1.0f);
     shadowPass.draw(
@@ -119,7 +119,7 @@ int main() {
     // PASS 2: ジオメトリパス (Gバッファへの書き込み)
     // ==========================================
     auto geometryPass = device.create_rasterize_pass<
-        Shaders::DefaultVertex, Shaders::DefaultVarying, float>(cameraDepth);
+        Shaders::DefaultVertex, Shaders::DefaultVarying, float>(cameraDepth.view());
 
     // 2-1. 床
 
@@ -156,9 +156,9 @@ int main() {
 
     lightingPass.execute(
         w, h,
-        std::bind_back(Shaders::deferredLightingCS, std::ref(colorBuffer),
-                       std::cref(albedoBuffer), std::cref(normalBuffer),
-                       std::cref(worldPosBuffer), std::cref(shadowDepth),
+        std::bind_back(Shaders::deferredLightingCS, colorBuffer.view(),
+                       albedoBuffer.view(), normalBuffer.view(),
+                       worldPosBuffer.view(), shadowDepth.view(),
                        lightSpaceMatrix, lightDir, w, h));
 
     // ==========================================

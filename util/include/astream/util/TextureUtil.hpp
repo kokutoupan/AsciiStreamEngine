@@ -112,6 +112,35 @@ inline bool drawText(TextureView<char> view, int startX, int startY,
   return cy < texH;
 }
 
+namespace detail {
+template <typename T>
+void blit_texture_impl(TextureView<T> dst, TextureView<const T> src, int posX,
+                       int posY) {
+  int dstW = dst.width();
+  int dstH = dst.height();
+  int srcW = src.width();
+  int srcH = src.height();
+
+  if (posX >= dstW || posY >= dstH || posX + srcW <= 0 || posY + srcH <= 0) {
+    return;
+  }
+
+  int srcStartX = std::max(0, -posX);
+  int srcStartY = std::max(0, -posY);
+  int srcEndX = std::min(srcW, dstW - posX);
+  int srcEndY = std::min(srcH, dstH - posY);
+  int copyWidth = srcEndX - srcStartX;
+
+  for (int srcY = srcStartY; srcY < srcEndY; ++srcY) {
+    int dstY = posY + srcY;
+    T *dstRow = &dst[dstY, posX + srcStartX];
+    const T *srcRow = &src[srcY, srcStartX];
+
+    std::copy_n(srcRow, copyWidth, dstRow);
+  }
+}
+} // namespace detail
+
 /**
  * @brief テクスチャを別のテクスチャへ等倍で合成 (Blit) する（行単位コピー版）
  * @param dst 転送先のテクスチャ (例: メインのカラーバッファ)
@@ -119,36 +148,21 @@ inline bool drawText(TextureView<char> view, int startX, int startY,
  * @param posX 転送先における左上のX座標
  * @param posY 転送先における左上のY座標
  */
-template <typename T>
-inline void blit_texture(Texture2D<T> &dst, const Texture2D<T> &src, int posX,
-                         int posY) {
-  int dstW = dst.width();
-  int dstH = dst.height();
-  int srcW = src.width();
-  int srcH = src.height();
+template <typename Dst, typename Src>
+  requires convertible_to_texture_view<
+               Dst, typename std::remove_cvref_t<
+                        decltype(*std::declval<Dst>().data())>> &&
+           convertible_to_texture_view<
+               Src, typename std::remove_cvref_t<
+                        decltype(*std::declval<Src>().data())>>
+inline void blit_texture(Dst &&dst, Src &&src, int posX, int posY) {
+  using DstValue = std::remove_cvref_t<decltype(*std::declval<Dst>().data())>;
+  using SrcValue = std::remove_cvref_t<decltype(*std::declval<Src>().data())>;
 
-  // 完全に画面外なら即終了
-  if (posX >= dstW || posY >= dstH || posX + srcW <= 0 || posY + srcH <= 0) {
-    return;
-  }
+  TextureView<DstValue> dstView = std::forward<Dst>(dst);
+  TextureView<const SrcValue> srcView = std::forward<Src>(src);
 
-  // クラッピング（転送可能な矩形範囲を計算）
-  int srcStartX = std::max(0, -posX);
-  int srcStartY = std::max(0, -posY);
-  int srcEndX = std::min(srcW, dstW - posX);
-  int srcEndY = std::min(srcH, dstH - posY);
-
-  int copyWidth = srcEndX - srcStartX;
-
-  for (int srcY = srcStartY; srcY < srcEndY; ++srcY) {
-    int dstY = posY + srcY;
-
-    T *dstRow = dst.data() + (dstY * dstW) + (posX + srcStartX);
-    const T *srcRow = src.data() + (srcY * srcW) + srcStartX;
-
-    // 透過処理がない場合は、1行丸ごと一撃でコピー
-    std::copy_n(srcRow, copyWidth, dstRow);
-  }
+  detail::blit_texture_impl(dstView, srcView, posX, posY);
 }
 
 } // namespace TextureUtil

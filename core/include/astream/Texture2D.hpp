@@ -2,11 +2,20 @@
 
 #include <cassert>
 #include <cmath>
+#include <concepts>
 #include <mdspan>
 #include <vector>
 
+template <typename T> class TextureView;
+
+template <typename V, typename ValueType>
+concept convertible_to_texture_view =
+    std::convertible_to<V, TextureView<ValueType>> ||
+    std::convertible_to<V, TextureView<const ValueType>>;
+
 template <typename T> class TextureView {
 public:
+  using value_type = T;
   // 内部表現としての mdspan 型
   using mdspan_type = std::mdspan<
       T, std::extents<std::size_t, std::dynamic_extent, std::dynamic_extent>,
@@ -21,6 +30,11 @@ private:
 public:
   constexpr TextureView() noexcept = default;
   constexpr TextureView(mdspan_type span) noexcept : m_span(span) {}
+
+  template <typename U>
+    requires std::convertible_to<U *, T *>
+  constexpr TextureView(const TextureView<U> &other) noexcept
+      : m_span(other.get()) {}
 
   // 生の mdspan やポインタへのアクセス
   [[nodiscard]] constexpr mdspan_type &get() noexcept { return m_span; }
@@ -63,6 +77,50 @@ public:
 
     return TextureView(mdspan_type(sub_data, map));
   }
+
+  [[nodiscard]] constexpr T &at(std::size_t x, std::size_t y) noexcept {
+    return m_span[y, x];
+  }
+
+  [[nodiscard]] constexpr const T &at(std::size_t x,
+                                      std::size_t y) const noexcept {
+    return m_span[y, x];
+  }
+
+  [[nodiscard]] constexpr T sampleBilinear(float u, float v) const noexcept {
+    u = std::max(0.0f, std::min(1.0f, u));
+    v = std::max(0.0f, std::min(1.0f, v));
+
+    float texX = u * (static_cast<float>(width()) - 1.0f);
+    float texY = v * (static_cast<float>(height()) - 1.0f);
+
+    int x0 = static_cast<int>(std::floor(texX));
+    int y0 = static_cast<int>(std::floor(texY));
+    int x1 = std::min(static_cast<int>(width()) - 1, x0 + 1);
+    int y1 = std::min(static_cast<int>(height()) - 1, y0 + 1);
+
+    float tx = texX - x0;
+    float ty = texY - y0;
+
+    const T &s00 = m_span[y0, x0];
+    const T &s10 = m_span[y0, x1];
+    const T &s01 = m_span[y1, x0];
+    const T &s11 = m_span[y1, x1];
+
+    T s0 = s00 * (1.0f - tx) + s10 * tx;
+    T s1 = s01 * (1.0f - tx) + s11 * tx;
+
+    return s0 * (1.0f - ty) + s1 * ty;
+  }
+
+  constexpr void clear(T value) noexcept {
+    std::size_t h = height();
+    std::size_t w = width();
+    for (std::size_t y = 0; y < h; ++y) {
+      T *row = &m_span[y, 0];
+      std::fill_n(row, w, value);
+    }
+  }
 };
 
 template <typename T> class Texture2D {
@@ -92,35 +150,7 @@ public:
   [[nodiscard]] size_t size() const { return m_data.size(); }
 
   T sampleBilinear(float u, float v) const {
-    // 1. 座標を 0.0 ~ 1.0 にクランプ
-    u = std::max(0.0f, std::min(1.0f, u));
-    v = std::max(0.0f, std::min(1.0f, v));
-
-    // 2. テクスチャ空間のピクセル座標（連続値）に変換
-    // ピクセルの中心を考慮するため、サイズを掛けて 0.5 引く設計が一般的です
-    float texX = u * (m_width - 1);
-    float texY = v * (m_height - 1);
-
-    // 3. 周辺4ピクセルのインデックスと、その間の重み（フランク部分）を計算
-    int x0 = static_cast<int>(std::floor(texX));
-    int y0 = static_cast<int>(std::floor(texY));
-    int x1 = std::min(m_width - 1, x0 + 1);
-    int y1 = std::min(m_height - 1, y0 + 1);
-
-    float tx = texX - x0;
-    float ty = texY - y0;
-
-    // 4. 周辺4ピクセルの値をサンプリング
-    const T &s00 = at(x0, y0);
-    const T &s10 = at(x1, y0);
-    const T &s01 = at(x0, y1);
-    const T &s11 = at(x1, y1);
-
-    // 5. バイリニア補間
-    T s0 = s00 * (1.0f - tx) + s10 * tx;
-    T s1 = s01 * (1.0f - tx) + s11 * tx;
-
-    return s0 * (1.0f - ty) + s1 * ty;
+    return view().sampleBilinear(u, v);
   }
 
   [[nodiscard]] constexpr TextureView<T> view() noexcept {
