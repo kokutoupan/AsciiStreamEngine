@@ -39,7 +39,7 @@ public:
     return m_span.extent(0);
   }
 
-  // 2次元アクセス (y, x)
+  // 2次元アクセス [y, x]
   [[nodiscard]] constexpr T &operator[](std::size_t y, std::size_t x) noexcept {
     return m_span[y, x]; // 内部の mdspan も [y, x] で呼ぶ
   }
@@ -67,29 +67,29 @@ public:
 
 template <typename T> class Texture2D {
 private:
-  int width, height;
-  std::vector<T> data;
+  int m_width, m_height;
+  std::vector<T> m_data;
 
 public:
   Texture2D(int w, int h, T initialValue)
-      : width(w), height(h), data(w * h, initialValue) {}
+      : m_width(w), m_height(h), m_data(w * h, initialValue) {}
 
   void resize(int w, int h, T initialValue) {
-    width = w;
-    height = h;
-    data.assign(w * h, initialValue);
+    m_width = w;
+    m_height = h;
+    m_data.assign(w * h, initialValue);
   }
 
-  void clear(T value) { std::fill(data.begin(), data.end(), value); }
+  void clear(T value) { std::fill(m_data.begin(), m_data.end(), value); }
 
-  T &at(int x, int y) { return data[y * width + x]; }
-  const T &at(int x, int y) const { return data[y * width + x]; }
+  T &at(int x, int y) { return m_data[y * m_width + x]; }
+  const T &at(int x, int y) const { return m_data[y * m_width + x]; }
 
-  int getWidth() const { return width; }
-  int getHeight() const { return height; }
-  T *getData() { return data.data(); }
-  const T *getData() const { return data.data(); }
-  size_t getSize() const { return data.size(); }
+  [[nodiscard]] int width() const { return m_width; }
+  [[nodiscard]] int height() const { return m_height; }
+  [[nodiscard]] T *data() { return m_data.data(); }
+  [[nodiscard]] const T *data() const { return m_data.data(); }
+  [[nodiscard]] size_t size() const { return m_data.size(); }
 
   T sampleBilinear(float u, float v) const {
     // 1. 座標を 0.0 ~ 1.0 にクランプ
@@ -98,14 +98,14 @@ public:
 
     // 2. テクスチャ空間のピクセル座標（連続値）に変換
     // ピクセルの中心を考慮するため、サイズを掛けて 0.5 引く設計が一般的です
-    float texX = u * (width - 1);
-    float texY = v * (height - 1);
+    float texX = u * (m_width - 1);
+    float texY = v * (m_height - 1);
 
     // 3. 周辺4ピクセルのインデックスと、その間の重み（フランク部分）を計算
     int x0 = static_cast<int>(std::floor(texX));
     int y0 = static_cast<int>(std::floor(texY));
-    int x1 = std::min(width - 1, x0 + 1);
-    int y1 = std::min(height - 1, y0 + 1);
+    int x1 = std::min(m_width - 1, x0 + 1);
+    int y1 = std::min(m_height - 1, y0 + 1);
 
     float tx = texX - x0;
     float ty = texY - y0;
@@ -124,18 +124,38 @@ public:
   }
 
   [[nodiscard]] constexpr TextureView<T> view() noexcept {
-    // TextureView が公開した型をスマートに使用
+
     using view_type = TextureView<T>;
     using extents_type = typename view_type::extents_type;
     using mapping_type = typename view_type::mapping_type;
     using mdspan_type = typename view_type::mdspan_type;
 
-    auto ext = extents_type(static_cast<std::size_t>(getHeight()),
-                            static_cast<std::size_t>(getWidth()));
-    auto map = mapping_type(ext, std::array<std::size_t, 2>{
-                                     static_cast<std::size_t>(getWidth()), 1});
+    auto ext = extents_type(static_cast<std::size_t>(m_height),
+                            static_cast<std::size_t>(m_width));
+    auto map = mapping_type(
+        ext, std::array<std::size_t, 2>{static_cast<std::size_t>(m_width), 1});
 
-    // 内部 mdspan を作ってラッパーで包んで返す
-    return view_type(mdspan_type(getData(), map));
+    return view_type(mdspan_type(m_data.data(), map));
+  }
+
+  [[nodiscard]] constexpr TextureView<const T> view() const noexcept {
+
+    using view_type = TextureView<const T>;
+    using extents_type = typename view_type::extents_type;
+    using mapping_type = typename view_type::mapping_type;
+    using mdspan_type = typename view_type::mdspan_type;
+
+    auto ext = extents_type(static_cast<std::size_t>(m_height),
+                            static_cast<std::size_t>(m_width));
+    auto map = mapping_type(
+        ext, std::array<std::size_t, 2>{static_cast<std::size_t>(m_width), 1});
+
+    return view_type(mdspan_type(m_data.data(), map));
+  }
+
+  constexpr operator TextureView<T>() noexcept { return this->view(); }
+
+  constexpr operator TextureView<const T>() const noexcept {
+    return this->view();
   }
 };

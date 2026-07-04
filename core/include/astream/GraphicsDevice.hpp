@@ -63,8 +63,8 @@ public:
               std::span<const int> indices, VertexShader &&vertexShader,
               FragmentShader &&fragmentShader) {
 
-      int targetWidth = m_depthBuffer.getWidth();
-      int targetHeight = m_depthBuffer.getHeight();
+      int targetWidth = m_depthBuffer.width();
+      int targetHeight = m_depthBuffer.height();
 
       // 補間計算用に、1/W でスケールされた状態の Varying
       // 属性を保持する内部構造体
@@ -230,8 +230,8 @@ public:
     void draw(std::span<const InputVertex> vertices,
               std::span<const int> indices, VertexShader &&vertexShader) {
 
-      int targetWidth = m_depthBuffer.getWidth();
-      int targetHeight = m_depthBuffer.getHeight();
+      int targetWidth = m_depthBuffer.width();
+      int targetHeight = m_depthBuffer.height();
 
       struct VSOutput {
         glm::vec4 clipPos;

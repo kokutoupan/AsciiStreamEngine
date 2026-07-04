@@ -361,8 +361,8 @@ public:
             // [B]
             // 圧縮と送信（スレッドごとに個別に実行されるため、重いcompressが並列化される）
             send_engine_frame_compressed(
-                session.fd, session.colorBuffer->getData(),
-                session.colorBuffer->getSize(), session.width, session.height,
+                session.fd, session.colorBuffer->data(),
+                session.colorBuffer->size(), session.width, session.height,
                 session.compressedBuffer);
           });
 

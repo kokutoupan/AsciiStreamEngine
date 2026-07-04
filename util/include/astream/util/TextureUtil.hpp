@@ -122,10 +122,10 @@ inline bool drawText(TextureView<char> view, int startX, int startY,
 template <typename T>
 inline void blit_texture(Texture2D<T> &dst, const Texture2D<T> &src, int posX,
                          int posY) {
-  int dstW = dst.getWidth();
-  int dstH = dst.getHeight();
-  int srcW = src.getWidth();
-  int srcH = src.getHeight();
+  int dstW = dst.width();
+  int dstH = dst.height();
+  int srcW = src.width();
+  int srcH = src.height();
 
   // 完全に画面外なら即終了
   if (posX >= dstW || posY >= dstH || posX + srcW <= 0 || posY + srcH <= 0) {
@@ -143,8 +143,8 @@ inline void blit_texture(Texture2D<T> &dst, const Texture2D<T> &src, int posX,
   for (int srcY = srcStartY; srcY < srcEndY; ++srcY) {
     int dstY = posY + srcY;
 
-    T *dstRow = dst.getData() + (dstY * dstW) + (posX + srcStartX);
-    const T *srcRow = src.getData() + (srcY * srcW) + srcStartX;
+    T *dstRow = dst.data() + (dstY * dstW) + (posX + srcStartX);
+    const T *srcRow = src.data() + (srcY * srcW) + srcStartX;
 
     // 透過処理がない場合は、1行丸ごと一撃でコピー
     std::copy_n(srcRow, copyWidth, dstRow);
