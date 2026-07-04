@@ -46,3 +46,7 @@ astream_compile_assets(demo_cube_multiplayer
 add_executable(render_only renderer_sample.cpp)
 target_link_libraries(render_only PRIVATE astream_core ${LIBS} glm::glm)
 
+# チャットアプリサンプル
+add_executable(demo_chat chat/main.cpp)
+target_link_libraries(demo_chat PRIVATE astream_core astream_util ${LIBS} ZLIB::ZLIB)
+
