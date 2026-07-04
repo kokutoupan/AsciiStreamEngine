@@ -19,5 +19,5 @@ public:
                       WorldType &world) = 0;
 
   // 自分のカメラバッファに対するレンダリング
-  virtual void render(TextureView<char> colorBuffer, const WorldType &world) = 0;
+  virtual bool render(TextureView<char> colorBuffer, const WorldType &world) = 0;
 };

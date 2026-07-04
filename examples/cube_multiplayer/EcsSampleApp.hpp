@@ -482,7 +482,7 @@ public:
         input.getKeyDown(Key::r) || input.getKeyDown(Key::R);
   }
 
-  void render(TextureView<char> outputTexture,
+  bool render(TextureView<char> outputTexture,
               const EcsGameWorld &world) override {
     auto renderStart = std::chrono::steady_clock::now();
     double frameDeltaMs =
@@ -610,5 +610,6 @@ public:
     // TextureViewのサンプル
     TextureUtil::drawText(outputTexture.subView(0, 3, 20, 2), 0, 0,
                           "TextureView is good");
+    return true;
   }
 };

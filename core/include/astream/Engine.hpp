@@ -66,6 +66,12 @@ concept IsGameWorld =
       { world.globalUpdate(dt) } -> std::same_as<void>;
     };
 
+template <typename T>
+concept HasPreUpdate = requires(T &t) { t.preUpdate(); };
+
+template <typename T>
+concept HasPostUpdate = requires(T &t) { t.postUpdate(); };
+
 template <typename Session, typename World>
 concept IsConnectionSession =
     requires(Session s, int clientId, int w, int h, World &world,
@@ -74,7 +80,7 @@ concept IsConnectionSession =
       { s.init(clientId, w, h, world) } -> std::same_as<void>;
       { s.onDisconnect(world) } -> std::same_as<void>;
       { s.update(clientId, input, world) } -> std::same_as<void>;
-      { s.render(buf, const_world) } -> std::same_as<void>;
+      { s.render(buf, const_world) } -> std::same_as<bool>;
     };
 
 // =============================================================================
@@ -325,6 +331,9 @@ public:
       }
 
       // 3. サーバーコアゲームループライン
+      if constexpr (HasPreUpdate<WorldType>) {
+        m_world.preUpdate();
+      }
 
       // 3-A. 各プレイヤーの入力をワールド側に流し込んで集約
       for (auto &[fd, session] : m_sessions) {
@@ -350,25 +359,32 @@ public:
       // 2. 集めたセッションに対して、並列実行
       const auto &const_world = m_world;
 
-      std::for_each(
-          std::execution::par, active_sessions.begin(), active_sessions.end(),
-          [&const_world](ClientSession *session_ptr) {
-            auto &session = *session_ptr;
+      std::for_each(std::execution::par, active_sessions.begin(),
+                    active_sessions.end(),
+                    [&const_world](ClientSession *session_ptr) {
+                      auto &session = *session_ptr;
 
-            // [A] 各プレイヤー視点での描画（const world を渡す）
-            session.context->render(session.colorBuffer->view(), const_world);
+                      // [A] 各プレイヤー視点での描画（const world を渡す）
+                      bool should_send = session.context->render(
+                          session.colorBuffer->view(), const_world);
 
-            // [B]
-            // 圧縮と送信（スレッドごとに個別に実行されるため、重いcompressが並列化される）
-            send_engine_frame_compressed(
-                session.fd, session.colorBuffer->data(),
-                session.colorBuffer->size(), session.width, session.height,
-                session.compressedBuffer);
-          });
+                      // [B]
+                      // 圧縮と送信（スレッドごとに個別に実行されるため、重いcompressが並列化される）
+                      if (should_send) {
+                        send_engine_frame_compressed(
+                            session.fd, session.colorBuffer->data(),
+                            session.colorBuffer->size(), session.width,
+                            session.height, session.compressedBuffer);
+                      }
+                    });
 
       // 3. 次フレームへの入力状態の遷移は、メインスレッドに戻って安全に一括処理
       for (auto *session_ptr : active_sessions) {
         session_ptr->input.nextFrame();
+      }
+
+      if constexpr (HasPostUpdate<WorldType>) {
+        m_world.postUpdate();
       }
 
       main_loop.stop();

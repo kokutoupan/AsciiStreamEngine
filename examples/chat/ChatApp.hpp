@@ -13,6 +13,8 @@
 // GraphicsDevice.
 
 class ChatWorld {
+private:
+  bool m_frameChanged = false; // このフレーム内で変更があったか
 public:
   struct PlayerState {
     std::string name;
@@ -22,7 +24,18 @@ public:
   std::unordered_map<int, PlayerState> m_players;
   std::vector<std::string> m_chatLog;
 
-  ChatWorld() { m_chatLog.push_back("=== System: Chat room initialized ==="); }
+  ChatWorld() {
+    m_chatLog.push_back("=== System: Chat room initialized ===");
+    m_frameChanged = true;
+  }
+
+  void clearFrameChangedFlag() { m_frameChanged = false; }
+
+  bool hasChangedThisFrame() const { return m_frameChanged; }
+
+  void markChanged() { m_frameChanged = true; }
+
+  void postUpdate() { clearFrameChangedFlag(); };
 
   // Matches IsGameWorld requirement
   void processPlayerInput(int clientId, const InputDevice &input) {
@@ -42,6 +55,7 @@ public:
 
       if (!msg.empty()) {
         m_chatLog.push_back(it->second.name + ": " + msg);
+        markChanged();
       }
       it->second.inputLine.clear();
     }
@@ -53,6 +67,7 @@ public:
     if (m_chatLog.size() > 100) {
       m_chatLog.erase(m_chatLog.begin(),
                       m_chatLog.begin() + (m_chatLog.size() - 100));
+      markChanged();
     }
   }
 
@@ -61,6 +76,7 @@ public:
     p.name = "User_" + std::to_string(clientId);
     m_players.emplace(clientId, std::move(p));
     m_chatLog.push_back("*** System: " + p.name + " entered the chat ***");
+    markChanged();
   }
 
   void removePlayer(int clientId) {
@@ -69,6 +85,7 @@ public:
       m_chatLog.push_back("*** System: " + it->second.name +
                           " left the chat ***");
       m_players.erase(it);
+      markChanged();
     }
   }
 };
@@ -79,6 +96,7 @@ private:
   int m_width = 80;
   int m_height = 24;
   int m_scrollOffset = 0;
+  bool m_dirty = true;
 
 public:
   ChatSession() = default;
@@ -96,20 +114,41 @@ public:
 
   // Matches IsConnectionSession requirement
   void update(int clientId, const InputDevice &input, ChatWorld &world) {
+    auto it = world.m_players.find(clientId);
+    std::string prevStr;
+    if (it != world.m_players.end()) {
+      prevStr = it->second.inputLine.str();
+    }
+
     world.processPlayerInput(clientId, input);
+
+    if (it != world.m_players.end()) {
+      if (it->second.inputLine.str() != prevStr) {
+        m_dirty = true;
+      }
+    }
 
     if (input.getKeyDown(Key::Up)) {
       m_scrollOffset++;
+      m_dirty = true;
     }
     if (input.getKeyDown(Key::Down)) {
       if (m_scrollOffset > 0) {
         m_scrollOffset--;
+        m_dirty = true;
       }
     }
   }
 
   // Matches IsConnectionSession requirement
-  void render(TextureView<char> buf, const ChatWorld &world) {
+  bool render(TextureView<char> buf, const ChatWorld &world) {
+
+    if (!m_dirty && !world.hasChangedThisFrame()) {
+      return false; // Skip drawing and transmission
+    }
+
+    m_dirty = false;
+
     buf.clear(' ');
 
     // Header UI
@@ -157,5 +196,7 @@ public:
           "[" + it->second.name + "]: " + it->second.inputLine.str() + "_";
       TextureUtil::drawText(buf, 2, m_height - 2, prompt);
     }
+
+    return true; // Sent frame
   }
 };
