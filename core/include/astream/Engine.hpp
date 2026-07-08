@@ -11,6 +11,9 @@
 #include <vector>
 #include <zlib.h>
 
+#include <astream/AuthContext.hpp>
+#include <astream/UserStore.hpp>
+
 // =============================================================================
 // OS固有のネットワーク・システムコールヘッダーの切り替え
 // =============================================================================
@@ -144,18 +147,30 @@ private:
 
   WorldType m_world; // サーバー上に1つだけ実体化する世界の真実
 
-  struct ClientSession {
+  struct SessionCore {
     int fd;
     int width = 80;
     int height = 24;
-    bool size_initialized = false;
     InputDevice input;
-    std::unique_ptr<SessionType> context;
     std::unique_ptr<Texture2D<char>> colorBuffer;
     std::vector<uint8_t> compressedBuffer;
   };
 
-  std::unordered_map<int, ClientSession> m_sessions;
+  // 認証中のセッション
+  struct AuthenticatingSession {
+    SessionCore core; // 共通要素
+    std::unique_ptr<AuthContext> authContext;
+  };
+
+  // 認証後のアクティブなセッション
+  struct ActiveSession {
+    SessionCore core; // 共通要素
+    std::unique_ptr<SessionType> context;
+  };
+
+  std::unordered_map<int, AuthenticatingSession> m_authenticatingSessions;
+  std::unordered_map<int, ActiveSession> m_sessions;
+
   float m_targetFps = 30.0f;
 
 public:
@@ -272,11 +287,6 @@ public:
 #else
           m_pollFds.push_back({client_sock, POLLIN, 0});
 #endif
-
-          ClientSession session;
-          session.fd = client_sock;
-          session.context = std::make_unique<SessionType>();
-          m_sessions[client_sock] = std::move(session);
         }
       }
 
@@ -284,9 +294,14 @@ public:
       for (size_t i = 1; i < m_pollFds.size(); ++i) {
         int fd = (int)m_pollFds[i].fd;
         if (m_pollFds[i].revents & POLLIN) {
-          auto &session = m_sessions[fd];
 
-          if (!session.size_initialized) {
+          auto session_it = m_sessions.find(fd);
+          if (session_it == m_sessions.end()) {
+
+            ActiveSession session;
+            session.core.fd = fd;
+            session.context = std::make_unique<SessionType>();
+
             uint16_t size_packet[2] = {0, 0};
             int len = recv(fd, (char *)size_packet, sizeof(size_packet), 0);
             if (len <= 0) {
@@ -296,19 +311,22 @@ public:
               --i;
               continue;
             }
-            session.width = ntohs(size_packet[0]);
-            session.height = ntohs(size_packet[1]);
-            if (session.width < 1)
-              session.width = 80;
-            if (session.height < 1)
-              session.height = 24;
+            session.core.width = ntohs(size_packet[0]);
+            session.core.height = ntohs(size_packet[1]);
+            if (session.core.width < 1)
+              session.core.width = 80;
+            if (session.core.height < 1)
+              session.core.height = 24;
 
-            session.context->init(fd, session.width, session.height, m_world);
-            session.colorBuffer = std::make_unique<Texture2D<char>>(
-                session.width, session.height, ' ');
+            session.core.colorBuffer = std::make_unique<Texture2D<char>>(
+                session.core.width, session.core.height, ' ');
 
-            session.size_initialized = true;
+            m_sessions[fd] = std::move(session);
+            m_sessions[fd].context->init(fd, session.core.width,
+                                         session.core.height, m_world);
           } else {
+
+            auto &session = session_it->second;
             char recv_buf[64];
 #if defined(_WIN32)
             // あらかじめ非ブロッキング化しているため、MSG_DONTWAIT不要で0指定
@@ -318,7 +336,7 @@ public:
 #endif
             if (n > 0) {
               for (int j = 0; j < n; ++j)
-                session.input.pressKey(recv_buf[j]);
+                session.core.input.pressKey(recv_buf[j]);
             } else if (n == 0 || (n < 0 &&
 #if defined(_WIN32)
                                   WSAGetLastError() != WSAEWOULDBLOCK
@@ -331,6 +349,7 @@ public:
               close(fd);
               m_pollFds[i] = m_pollFds.back();
               m_pollFds.pop_back();
+              m_sessions.erase(session_it);
               --i;
               continue;
             }
@@ -345,10 +364,8 @@ public:
 
       // 3-A. 各プレイヤーの入力をワールド側に流し込んで集約
       for (auto &[fd, session] : m_sessions) {
-        if (!session.size_initialized)
-          continue;
-        session.input.setDeltaTime(deltaTime);
-        session.context->update(fd, session.input, m_world);
+        session.core.input.setDeltaTime(deltaTime);
+        session.context->update(fd, session.core.input, m_world);
       }
 
       // 3-B. サーバー側のグローバル更新
@@ -356,48 +373,44 @@ public:
 
       if constexpr (HasSessionPostUpdate<SessionType, WorldType>) {
         for (auto &[fd, session] : m_sessions) {
-          if (!session.size_initialized)
-            continue;
-          session.input.setDeltaTime(deltaTime);
+          session.core.input.setDeltaTime(deltaTime);
           session.context->postUpdate(fd, m_world);
         }
       }
 
       // 3-C. 各プレイヤー視点での独立描画・コピー・最速送信
 
-      std::vector<ClientSession *> active_sessions;
+      std::vector<ActiveSession *> active_sessions;
       active_sessions.reserve(m_sessions.size());
 
       for (auto &[fd, session] : m_sessions) {
-        if (session.size_initialized) {
-          active_sessions.push_back(&session);
-        }
+        active_sessions.push_back(&session);
       }
       // 2. 集めたセッションに対して、並列実行
       const auto &const_world = m_world;
 
-      std::for_each(std::execution::par, active_sessions.begin(),
-                    active_sessions.end(),
-                    [&const_world](ClientSession *session_ptr) {
-                      auto &session = *session_ptr;
+      std::for_each(
+          std::execution::par, active_sessions.begin(), active_sessions.end(),
+          [&const_world](ActiveSession *session_ptr) {
+            auto &session = *session_ptr;
 
-                      // [A] 各プレイヤー視点での描画（const world を渡す）
-                      bool should_send = session.context->render(
-                          session.colorBuffer->view(), const_world);
+            // [A] 各プレイヤー視点での描画（const world を渡す）
+            bool should_send = session.context->render(
+                session.core.colorBuffer->view(), const_world);
 
-                      // [B]
-                      // 圧縮と送信（スレッドごとに個別に実行されるため、重いcompressが並列化される）
-                      if (should_send) {
-                        send_engine_frame_compressed(
-                            session.fd, session.colorBuffer->data(),
-                            session.colorBuffer->size(), session.width,
-                            session.height, session.compressedBuffer);
-                      }
-                    });
+            // [B]
+            // 圧縮と送信（スレッドごとに個別に実行されるため、重いcompressが並列化される）
+            if (should_send) {
+              send_engine_frame_compressed(
+                  session.core.fd, session.core.colorBuffer->data(),
+                  session.core.colorBuffer->size(), session.core.width,
+                  session.core.height, session.core.compressedBuffer);
+            }
+          });
 
       // 3. 次フレームへの入力状態の遷移は、メインスレッドに戻って安全に一括処理
       for (auto *session_ptr : active_sessions) {
-        session_ptr->input.nextFrame();
+        session_ptr->core.input.nextFrame();
       }
 
       if constexpr (HasPostUpdate<WorldType>) {
@@ -406,9 +419,7 @@ public:
 
       if constexpr (HasSessionEndFrame<SessionType, WorldType>) {
         for (auto &[fd, session] : m_sessions) {
-          if (!session.size_initialized)
-            continue;
-          session.input.setDeltaTime(deltaTime);
+          session.core.input.setDeltaTime(deltaTime);
           session.context->endFrame(fd, m_world);
         }
       }

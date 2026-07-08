@@ -21,6 +21,6 @@ else()
   target_include_directories(astream_util PUBLIC
         $<BUILD_INTERFACE:${CMAKE_CURRENT_SOURCE_DIR}/include>
         $<INSTALL_INTERFACE:include>
-    )
+  )
   target_link_libraries(astream_util PUBLIC astream_core)
 endif()
