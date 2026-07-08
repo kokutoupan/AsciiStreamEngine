@@ -1,0 +1,13 @@
+# Chat emulator test script
+# Wait for server connection to be fully established and initial screen sent
+wait 200
+
+# Type a test message to the chat
+type hello, this is an automated emulator test!
+wait 100
+
+# Press Enter to send the message
+key enter
+
+# Wait to receive the final screen update from the server
+wait 300
