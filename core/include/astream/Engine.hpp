@@ -128,6 +128,15 @@ inline int send_engine_frame_compressed(int sock, const char *raw_data,
   return send(sock, (const char *)comp_buf.data(), (int)comp_len, 0);
 }
 
+// エラーが「データがまだ届いてないだけ（正常）」かどうかを判定するヘルパー
+inline bool IsWouldBlock() {
+#if defined(_WIN32)
+  return WSAGetLastError() == WSAEWOULDBLOCK;
+#else
+  return errno == EAGAIN || errno == EWOULDBLOCK;
+#endif
+}
+
 // =============================================================================
 // エンジンコアクラス
 // =============================================================================
@@ -135,6 +144,8 @@ template <typename WorldType, typename SessionType>
   requires IsGameWorld<WorldType> && IsConnectionSession<SessionType, WorldType>
 class Engine {
 private:
+  constexpr static bool enableAuth = true;
+  UserStore m_userStore;
   int m_port;
   int m_serverSock = -1;
 
@@ -152,6 +163,7 @@ private:
     int width = 80;
     int height = 24;
     InputDevice input;
+    std::string user_name;
     std::unique_ptr<Texture2D<char>> colorBuffer;
     std::vector<uint8_t> compressedBuffer;
   };
@@ -295,12 +307,19 @@ public:
         int fd = (int)m_pollFds[i].fd;
         if (m_pollFds[i].revents & POLLIN) {
 
-          auto session_it = m_sessions.find(fd);
-          if (session_it == m_sessions.end()) {
+          auto activeSession_it = m_sessions.find(fd);
 
-            ActiveSession session;
-            session.core.fd = fd;
-            session.context = std::make_unique<SessionType>();
+          auto authing_it = m_authenticatingSessions.find(fd);
+          // if (activeSession_it == m_sessions.end()) {
+          //   auto authing_it = m_authenticatingSessions.find(fd);
+          // }
+
+          // 初期コネクション前
+          if (activeSession_it == m_sessions.end() &&
+              authing_it == m_authenticatingSessions.end()) {
+
+            SessionCore sessionCore;
+            sessionCore.fd = fd;
 
             uint16_t size_packet[2] = {0, 0};
             int len = recv(fd, (char *)size_packet, sizeof(size_packet), 0);
@@ -311,22 +330,45 @@ public:
               --i;
               continue;
             }
-            session.core.width = ntohs(size_packet[0]);
-            session.core.height = ntohs(size_packet[1]);
-            if (session.core.width < 1)
-              session.core.width = 80;
-            if (session.core.height < 1)
-              session.core.height = 24;
+            int w = ntohs(size_packet[0]);
+            int h = ntohs(size_packet[1]);
+            sessionCore.width = w;
+            sessionCore.height = h;
 
-            session.core.colorBuffer = std::make_unique<Texture2D<char>>(
-                session.core.width, session.core.height, ' ');
+            if (w < 1)
+              sessionCore.width = 80;
+            else if (w > 254)
+              sessionCore.width = 254;
+            if (h < 1)
+              sessionCore.height = 24;
+            else if (h > 254)
+              sessionCore.height = 254;
 
-            m_sessions[fd] = std::move(session);
-            m_sessions[fd].context->init(fd, session.core.width,
-                                         session.core.height, m_world);
+            sessionCore.colorBuffer = std::make_unique<Texture2D<char>>(
+                sessionCore.width, sessionCore.height, ' ');
+
+            if (!enableAuth) {
+
+              sessionCore.user_name = "Guest_" + std::to_string(fd);
+              ActiveSession session;
+              session.context = std::make_unique<SessionType>();
+              session.core = std::move(sessionCore);
+
+              m_sessions[fd] = std::move(session);
+              m_sessions[fd].context->init(fd, w, h, m_world);
+              continue;
+
+            } else {
+              AuthenticatingSession session;
+
+              session.authContext = std::make_unique<AuthContext>(&m_userStore);
+              session.core = std::move(sessionCore);
+
+              m_authenticatingSessions[fd] = std::move(session);
+              continue;
+            }
           } else {
 
-            auto &session = session_it->second;
             char recv_buf[64];
 #if defined(_WIN32)
             // あらかじめ非ブロッキング化しているため、MSG_DONTWAIT不要で0指定
@@ -335,25 +377,77 @@ public:
             int n = recv(fd, recv_buf, sizeof(recv_buf), MSG_DONTWAIT);
 #endif
             if (n > 0) {
-              for (int j = 0; j < n; ++j)
-                session.core.input.pressKey(recv_buf[j]);
-            } else if (n == 0 || (n < 0 &&
-#if defined(_WIN32)
-                                  WSAGetLastError() != WSAEWOULDBLOCK
-#else
-                                  errno != EAGAIN && errno != EWOULDBLOCK
-#endif
-                                  )) {
-              // エラーまたは正常切断時のクリーンアップ処理
-              session.context->onDisconnect(m_world);
+              for (int j = 0; j < n; ++j) {
+
+                if (activeSession_it != m_sessions.end()) {
+
+                  auto &session = activeSession_it->second;
+                  session.core.input.pressKey(recv_buf[j]);
+                } else {
+                  authing_it->second.core.input.pressKey(recv_buf[j]);
+                }
+              }
+            } else if (n == 0 || (n < 0 && !IsWouldBlock())) {
+              if (activeSession_it != m_sessions.end()) {
+
+                // エラーまたは正常切断時のクリーンアップ処理
+                activeSession_it->second.context->onDisconnect(m_world);
+                m_sessions.erase(activeSession_it);
+              }
+              // 認証中だった場合は、認証中のマップから消す
+              else {
+                m_authenticatingSessions.erase(authing_it);
+              }
+
               close(fd);
               m_pollFds[i] = m_pollFds.back();
               m_pollFds.pop_back();
-              m_sessions.erase(session_it);
               --i;
+
               continue;
             }
           }
+        }
+      }
+
+      // イテレータを使って全要素をループ
+      auto authing_it = m_authenticatingSessions.begin();
+      while (authing_it != m_authenticatingSessions.end()) {
+
+        // 認証中のセッション参照を取得
+        auto &authing = authing_it->second;
+
+        int fd = authing.core.fd;
+
+        // アップデート処理
+        const AuthResult &result =
+            authing.authContext->update(fd, authing.core.input);
+        const bool isDirty =
+            authing.authContext->render(authing.core.colorBuffer->view());
+
+        if (isDirty)
+          send_engine_frame_compressed(
+              authing.core.fd, authing.core.colorBuffer->data(),
+              authing.core.colorBuffer->size(), authing.core.width,
+              authing.core.height, authing.core.compressedBuffer);
+
+        authing.core.input.nextFrame();
+
+        if (result.success) {
+          ActiveSession session;
+          session.context = std::make_unique<SessionType>();
+
+          // m_sessions 側に所有権をムーブ
+          session.core = std::move(authing.core);
+
+          m_sessions[fd] = std::move(session);
+          m_sessions[fd].context->init(fd, m_sessions[fd].core.width,
+                                       m_sessions[fd].core.height, m_world);
+
+          authing_it = m_authenticatingSessions.erase(authing_it);
+        } else {
+          // 削除しなかった場合のみ、自力でイテレータを次に進める
+          ++authing_it;
         }
       }
 
@@ -408,7 +502,8 @@ public:
             }
           });
 
-      // 3. 次フレームへの入力状態の遷移は、メインスレッドに戻って安全に一括処理
+      // 3.
+      // 次フレームへの入力状態の遷移は、メインスレッドに戻って安全に一括処理
       for (auto *session_ptr : active_sessions) {
         session_ptr->core.input.nextFrame();
       }

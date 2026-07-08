@@ -5,6 +5,8 @@
 #include <astream/util/TextInputLine.hpp>
 #include <string>
 
+#include <iostream>
+
 struct AuthResult {
   bool success = false;
   std::string username = "";
@@ -12,6 +14,7 @@ struct AuthResult {
 
 class AuthContext {
 public:
+  bool m_isDirty = true;
   enum class State { SelectMode, InputUsername, InputPassword };
 
   AuthContext(UserStore *_userStore) : userStore(_userStore) {
@@ -24,29 +27,24 @@ public:
                  "Select mode (1-2): ";
   }
 
-  // 毎フレーム、Engineから入力を受け取って描画と状態遷移を行う
-  AuthResult update(int fd, const InputDevice &input,
-                    TextureView<char> colorBuffer) {
+  AuthResult update(int fd, const InputDevice &input) {
     AuthResult result;
-    // 1. 画面のクリア（ログイン画面全体の背景を空白に）
-    for (int y = 0; y < colorBuffer.height(); ++y) {
-      for (int x = 0; x < colorBuffer.width(); ++x) {
-        colorBuffer.at(x, y) = ' ';
-      }
-    }
 
-    // 2. 状態に応じた入力処理とテキスト描画
+    // 現在の状態を記憶（状態が変わったか検知するため）
+    State previousState = m_state;
+
     switch (m_state) {
     case State::SelectMode: {
-      // メニュー描画
-      drawText(colorBuffer, m_menuText, 2, 2);
-
-      // TextInputLine を使って1文字（または改行まで）受ける
-      m_inputLine.update(input);
-      std::string currentInput = m_inputLine.str();
-      drawText(colorBuffer, currentInput, 21, 8); // 入力中の文字をエコーバック
+      // 入力によってテキストラインが更新されたら Dirty
+      if (m_inputLine.update(input)) {
+        m_isDirty = true;
+      }
 
       if (input.getKeyDown(Key::Enter)) {
+        std::string currentInput = m_inputLine.str();
+        std::erase_if(currentInput,
+                      [](unsigned char c) { return std::isspace(c); });
+
         if (currentInput == "1") {
           m_isRegisterMode = false;
           m_state = State::InputUsername;
@@ -56,9 +54,86 @@ public:
           m_state = State::InputUsername;
           m_inputLine.clear();
         } else {
-          m_inputLine.clear(); // 1, 2 以外はリセット
+          m_inputLine.clear();
         }
       }
+      break;
+    }
+
+    case State::InputUsername: {
+      if (m_inputLine.update(input)) {
+        m_isDirty = true;
+      }
+
+      if (input.getKeyDown(Key::Enter)) {
+        std::string currentInput = m_inputLine.str();
+        if (!currentInput.empty()) {
+          std::erase_if(currentInput,
+                        [](unsigned char c) { return std::isspace(c); });
+          m_username = currentInput;
+          m_state = State::InputPassword;
+          m_inputLine.clear();
+        }
+      }
+      break;
+    }
+
+    case State::InputPassword: {
+      if (m_inputLine.update(input)) {
+        m_isDirty = true;
+      }
+
+      if (input.getKeyDown(Key::Enter)) {
+        std::string currentInput = m_inputLine.str();
+        std::erase_if(currentInput,
+                      [](unsigned char c) { return std::isspace(c); });
+        m_password = currentInput;
+        m_inputLine.clear();
+
+        if (m_isRegisterMode) {
+          bool registerOk = userStore->registerUser(m_username, m_password);
+          if (registerOk) {
+            result.success = true;
+            result.username = m_username;
+          } else {
+            m_state = State::SelectMode;
+          }
+        } else {
+          bool authOk = userStore->authenticate(m_username, m_password);
+          if (authOk) {
+            result.success = true;
+            result.username = m_username;
+          } else {
+            m_state = State::SelectMode;
+          }
+        }
+      }
+      break;
+    }
+    }
+
+    // 途中で m_state 自体が変わっていたら強制的に Dirty にする
+    if (m_state != previousState) {
+      m_isDirty = true;
+    }
+
+    return result;
+  }
+
+  bool render(TextureView<char> colorBuffer) {
+    // 変更がないなら、クリアも描画も一切スキップ
+    if (!m_isDirty) {
+      return false;
+    }
+
+    // 1. 画面のクリア
+    colorBuffer.clear(' ');
+
+    // 2. 現在の状態の見た目をバッファに描き込む
+    switch (m_state) {
+    case State::SelectMode: {
+      drawText(colorBuffer, m_menuText, 2, 2);
+      drawText(colorBuffer, m_inputLine.str(), 21, 8);
       break;
     }
 
@@ -67,18 +142,7 @@ public:
           m_isRegisterMode ? "[User Registration]" : "[User Login]";
       drawText(colorBuffer, title, 2, 2);
       drawText(colorBuffer, "Username: ", 2, 4);
-
-      m_inputLine.update(input);
-      std::string currentInput = m_inputLine.str();
-      drawText(colorBuffer, currentInput, 12, 4); // 入力中のユーザー名を表示
-
-      if (input.getKeyDown(Key::Enter)) {
-        if (!currentInput.empty()) {
-          m_username = currentInput;
-          m_state = State::InputPassword;
-          m_inputLine.clear();
-        }
-      }
+      drawText(colorBuffer, m_inputLine.str(), 12, 4);
       break;
     }
 
@@ -89,49 +153,14 @@ public:
       drawText(colorBuffer, "Username: " + m_username, 2, 4);
       drawText(colorBuffer, "Password: ", 2, 5);
 
-      m_inputLine.update(input);
-      std::string currentInput = m_inputLine.str();
-
-      // パスワードなのでアスタリスクでマスク表示
-      std::string masked(currentInput.length(), '*');
+      std::string masked(m_inputLine.str().length(), '*');
       drawText(colorBuffer, masked, 12, 5);
-
-      if (input.getKeyDown(Key::Enter)) {
-        m_password = currentInput;
-        m_inputLine.clear();
-
-        if (m_isRegisterMode) {
-          // 【登録モード】
-          // 本来はここでUserStoreに登録する
-          // 例: bool ok = userStore.registerUser(m_username, m_password);
-          bool registerOk = userStore->registerUser(m_username, m_password);
-
-          if (registerOk) {
-            result.success = true;
-            result.username = m_username;
-          } else {
-            // 失敗したら最初に戻る（エラーメッセージを出すとなお良い）
-            m_state = State::SelectMode;
-          }
-        } else {
-          // 【ログインモード】
-          // 本来はここでUserStoreの照合をする
-          bool authOk = userStore->authenticate(m_username, m_password);
-          // bool authOk = true;
-
-          if (authOk) {
-            result.success = true;
-            result.username = m_username;
-          } else {
-            m_state = State::SelectMode; // 弾かれたら最初へ
-          }
-        }
-      }
       break;
     }
     }
 
-    return result;
+    m_isDirty = false; // 描画完了したのでフラグを落とす
+    return true;       // 「画面が書き換わった」ことを通知
   }
 
 private:
