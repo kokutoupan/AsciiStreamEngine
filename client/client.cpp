@@ -21,7 +21,7 @@ constexpr std::string_view HOST_PORT = "12345";
 constexpr std::string_view HOST_DOMAIN = "localhost";
 
 #ifndef USE_ASYNC_KEY_STATE
-#define USE_ASYNC_KEY_STATE 1
+#define USE_ASYNC_KEY_STATE 0
 #endif
 
 // =============================================================================

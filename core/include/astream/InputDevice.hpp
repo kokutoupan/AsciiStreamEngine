@@ -2,6 +2,7 @@
 #include <algorithm>
 #include <cstdint>
 #include <iterator>
+#include <string_view>
 
 enum class Key : uint8_t {
   // 小文字アルファベット
