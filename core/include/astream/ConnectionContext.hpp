@@ -18,6 +18,13 @@ public:
   virtual void update(int clientId, const InputDevice &input,
                       WorldType &world) = 0;
 
+  // 【Optional】毎フレーム、ワールドのglobal updateの直後に呼び出される
+  // virtual void postUpdate(int clientID, WorldType& world);
+
   // 自分のカメラバッファに対するレンダリング
-  virtual bool render(TextureView<char> colorBuffer, const WorldType &world) = 0;
+  virtual bool render(TextureView<char> colorBuffer,
+                      const WorldType &world) = 0;
+
+  // 【Optional】毎フレーム、すべての処理（render/送信）が完了した直後に呼び出される（フラグリセット等）
+  // virtual void endFrame(int clientId, WorldType& world);
 };

@@ -140,14 +140,19 @@ public:
     }
   }
 
+  // Optional session hook: called after global update
+  void postUpdate(int clientId, ChatWorld &world) {
+    if (world.hasChangedThisFrame()) {
+      m_dirty = true;
+    }
+  }
+
   // Matches IsConnectionSession requirement
   bool render(TextureView<char> buf, const ChatWorld &world) {
 
-    if (!m_dirty && !world.hasChangedThisFrame()) {
+    if (!m_dirty) {
       return false; // Skip drawing and transmission
     }
-
-    m_dirty = false;
 
     buf.clear(' ');
 
@@ -199,4 +204,7 @@ public:
 
     return true; // Sent frame
   }
+
+  // Optional session hook: called at the end of the frame
+  void endFrame(int clientId, ChatWorld &world) { m_dirty = false; }
 };

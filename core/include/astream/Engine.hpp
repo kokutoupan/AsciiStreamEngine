@@ -83,6 +83,14 @@ concept IsConnectionSession =
       { s.render(buf, const_world) } -> std::same_as<bool>;
     };
 
+template <typename T, typename World>
+concept HasSessionPostUpdate =
+    requires(T &t, int id, World &w) { t.postUpdate(id, w); };
+
+template <typename T, typename World>
+concept HasSessionEndFrame =
+    requires(T &t, int id, World &w) { t.endFrame(id, w); };
+
 // =============================================================================
 // zlibによる圧縮送信ヘルパー (引数の型キャストをOSに合わせて調整)
 // =============================================================================
@@ -346,6 +354,15 @@ public:
       // 3-B. サーバー側のグローバル更新
       m_world.globalUpdate(deltaTime);
 
+      if constexpr (HasSessionPostUpdate<SessionType, WorldType>) {
+        for (auto &[fd, session] : m_sessions) {
+          if (!session.size_initialized)
+            continue;
+          session.input.setDeltaTime(deltaTime);
+          session.context->postUpdate(fd, m_world);
+        }
+      }
+
       // 3-C. 各プレイヤー視点での独立描画・コピー・最速送信
 
       std::vector<ClientSession *> active_sessions;
@@ -385,6 +402,15 @@ public:
 
       if constexpr (HasPostUpdate<WorldType>) {
         m_world.postUpdate();
+      }
+
+      if constexpr (HasSessionEndFrame<SessionType, WorldType>) {
+        for (auto &[fd, session] : m_sessions) {
+          if (!session.size_initialized)
+            continue;
+          session.input.setDeltaTime(deltaTime);
+          session.context->endFrame(fd, m_world);
+        }
       }
 
       main_loop.stop();
