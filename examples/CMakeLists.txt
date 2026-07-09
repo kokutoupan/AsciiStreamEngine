@@ -48,5 +48,5 @@ target_link_libraries(render_only PRIVATE astream_core ${LIBS} glm::glm)
 
 # チャットアプリサンプル
 add_executable(demo_chat chat/main.cpp)
-target_link_libraries(demo_chat PRIVATE astream_core astream_util ${LIBS} ZLIB::ZLIB)
+target_link_libraries(demo_chat PRIVATE astream_core astream_util ${LIBS} ZLIB::ZLIB glm::glm)
 
