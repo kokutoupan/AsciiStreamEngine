@@ -3,7 +3,18 @@ add_library(astream_core STATIC
 )
 
 if(WIN32)
-  target_link_libraries(astream_core PRIVATE winmm)
+  target_link_libraries(astream_core
+    PUBLIC
+      glm::glm
+      ${LIBS}
+      ZLIB::ZLIB
+    PRIVATE winmm)
+else()
+  target_link_libraries(astream_core
+    PUBLIC
+      glm::glm
+      ${LIBS}
+      ZLIB::ZLIB)
 endif()
 target_include_directories(astream_core PUBLIC
   ${CMAKE_CURRENT_SOURCE_DIR}/include
