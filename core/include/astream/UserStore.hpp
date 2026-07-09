@@ -1,8 +1,9 @@
 #pragma once
 
-#include <algorithm>
-#include <cctype>
-#include <ranges>
+#include <fstream>
+#include <iostream>
+#include <print>
+#include <sstream>
 #include <string>
 #include <string_view>
 #include <unordered_map>
@@ -16,11 +17,17 @@ enum class RegisterPolicy {
   Disabled   // 登録機能を完全に無効化（読み込み専用）
 };
 
+enum class AccountStatus { Active, Banned };
+
 class UserStore {
 public:
   // ポリシーはコンストラクタやセッターで外部から指定可能に
-  explicit UserStore(RegisterPolicy policy = RegisterPolicy::AdminOnly)
-      : m_policy(policy) {}
+  explicit UserStore(RegisterPolicy policy = RegisterPolicy::AdminOnly,
+                     std::string filepath = "users.txt")
+      : m_policy(policy), m_filePath(std::move(filepath)) {
+    // インスタンス化のタイミングで自動ロードする
+    loadFromFile();
+  }
 
   // 認証
   [[nodiscard]] bool authenticate(std::string_view username,
@@ -37,13 +44,18 @@ public:
       return false;
     }
 
-    return verifyPassword(password, it->second);
+    if (it->second.status == AccountStatus::Banned) {
+      return false;
+    }
+
+    return verifyPassword(password, it->second.hashed_password);
   }
 
   // ユーザー登録（成否を返す）
   // m_policy の状態によって挙動が変化する
   bool registerUser(std::string_view username, std::string_view password,
                     bool is_internal_call = false) {
+
     // 内部呼び出し（サーバー起動時のファイル読み込みや、管理者コマンド）でない場合、ポリシーをチェック
     if (!is_internal_call) {
       if (m_policy == RegisterPolicy::Disabled ||
@@ -53,9 +65,14 @@ public:
     }
 
     auto clean_name = astream::util::trim(username);
-    if (clean_name.empty() || password.empty()) {
+    if (clean_name.empty() || password.empty())
       return false;
-    }
+    if (clean_name.contains(':') || clean_name.contains('\n') ||
+        clean_name.contains('\r'))
+      return false;
+    if (password.contains(':') || password.contains('\n') ||
+        password.contains('\r'))
+      return false;
 
     std::string name_str(clean_name);
     if (m_users.contains(name_str)) {
@@ -63,7 +80,21 @@ public:
     }
 
     // パスワードは内部でハッシュ化して保持（ファイル漏洩対策）
-    m_users[name_str] = hashPassword(password);
+    m_users[name_str].hashed_password = hashPassword(password);
+    m_users[name_str].status = AccountStatus::Active;
+
+    saveToFile();
+    return true;
+  }
+
+  bool banUser(std::string_view username) {
+    auto clean_name = astream::util::trim(username);
+    auto it = m_users.find(std::string(clean_name));
+    if (it == m_users.end()) {
+      return false; // ユーザーが存在しない
+    }
+
+    it->second.status = AccountStatus::Banned;
     saveToFile();
     return true;
   }
@@ -75,10 +106,65 @@ public:
     return m_policy;
   };
 
+  void loadFromFile() {
+    std::ifstream file(m_filePath);
+    if (!file.is_open()) {
+      // ファイルがない場合は新規作成される想定なのでエラーにはしない
+      return;
+    }
+
+    m_users.clear();
+    std::string line;
+
+    // 1行ずつ読み込む（改行でレコードが区切られているため安全）
+    while (std::getline(file, line)) {
+      if (line.empty())
+        continue;
+
+      std::stringstream ss(line);
+      std::string name, hash, status_str;
+
+      // コロン（:）で分割してパース
+      if (std::getline(ss, name, ':') && std::getline(ss, hash, ':') &&
+          std::getline(ss, status_str, ':')) {
+
+        AccountStatus status = (status_str == "Banned") ? AccountStatus::Banned
+                                                        : AccountStatus::Active;
+
+        m_users[name] = UserData{.hashed_password = hash, .status = status};
+      }
+    }
+    std::println("UserStore: Loaded {} users from {}", m_users.size(),
+                 m_filePath);
+  }
+
+  // テキスト形式でファイルに保存する
+  void saveToFile() const {
+    std::ofstream file(m_filePath, std::ios::trunc); // 常に上書き
+    if (!file.is_open()) {
+      std::println(std::cerr, "UserStore Error: Could not open {} for writing.",
+                   m_filePath);
+      return;
+    }
+
+    for (const auto &[name, data] : m_users) {
+      std::string_view status_str =
+          (data.status == AccountStatus::Banned) ? "Banned" : "Active";
+      // 「ユーザー名:ハッシュ:ステータス」の形式で書き出す
+      std::println(file, "{}:{}:{}", name, data.hashed_password, status_str);
+    }
+  }
+
 private:
-  std::unordered_map<std::string, std::string>
-      m_users; // username -> hashedPassword
+  struct UserData {
+    std::string hashed_password;
+    AccountStatus status = AccountStatus::Active;
+  };
+
+  std::unordered_map<std::string, UserData> m_users;
   RegisterPolicy m_policy;
+
+  std::string m_filePath;
 
   // パスワードハッシュ化ラッパー (bcryptやargon2などのライブラリをそのうち使う)
   std::string hashPassword(std::string_view password) const {
@@ -89,7 +175,4 @@ private:
                       std::string_view hash) const noexcept {
     return hash == ("hashed_" + std::string(password)); // 概念用のダミー
   }
-
-  void saveToFile() {}
-  void loadFromFile() {}
 };

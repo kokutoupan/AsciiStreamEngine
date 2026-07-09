@@ -6,8 +6,6 @@
 #include <astream/util/TextInputLine.hpp>
 #include <string>
 
-#include <iostream>
-
 struct AuthResult {
   bool success = false;
   std::string username = "";
@@ -18,14 +16,24 @@ public:
   bool m_isDirty = true;
   enum class State { SelectMode, InputUsername, InputPassword };
 
-  AuthContext(UserStore *_userStore) : userStore(_userStore) {
-    // モード選択用の初期メッセージ
-    m_menuText = "=================================\n"
-                 "    AsciiStreamEngine Login\n"
-                 "=================================\n"
-                 "1. Login\n"
-                 "2. Register\n\n"
-                 "Select mode (1-2): ";
+  AuthContext(UserStore *_userStore) : userStore(_userStore) {}
+
+  std::string getMenuText() const {
+    if (userStore && userStore->getRegisterPolicy() == RegisterPolicy::AllowAll) {
+      return "=================================\n"
+             "    AsciiStreamEngine Login\n"
+             "=================================\n"
+             "1. Login\n"
+             "2. Register\n\n"
+             "Select mode (1-2): ";
+    } else {
+      return "=================================\n"
+             "    AsciiStreamEngine Login\n"
+             "=================================\n"
+             "1. Login\n"
+             "             \n\n"
+             "Select mode (1):   ";
+    }
   }
 
   AuthResult update(int fd, const InputDevice &input) {
@@ -50,7 +58,7 @@ public:
           m_isRegisterMode = false;
           m_state = State::InputUsername;
           m_inputLine.clear();
-        } else if (currentInput == "2") {
+        } else if (currentInput == "2" && userStore && userStore->getRegisterPolicy() == RegisterPolicy::AllowAll) {
           m_isRegisterMode = true;
           m_state = State::InputUsername;
           m_inputLine.clear();
@@ -131,7 +139,7 @@ public:
     // 2. 現在の状態の見た目をバッファに描き込む
     switch (m_state) {
     case State::SelectMode: {
-      drawText(colorBuffer, m_menuText, 2, 2);
+      drawText(colorBuffer, getMenuText(), 2, 2);
       drawText(colorBuffer, m_inputLine.str(), 21, 8);
       break;
     }
@@ -168,7 +176,6 @@ private:
   bool m_isRegisterMode = false;
   std::string m_username = "";
   std::string m_password = "";
-  std::string m_menuText = "";
 
   astream::util::TextInputLine
       m_inputLine; // チャットでも使っている一行入力バッファ

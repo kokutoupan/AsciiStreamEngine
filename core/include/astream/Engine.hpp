@@ -70,6 +70,11 @@ concept IsGameWorld =
     };
 
 template <typename T>
+concept HasKickFds = requires(T &t) {
+  { t.getKickFds() } -> std::same_as<std::vector<int>>;
+};
+
+template <typename T>
 concept HasPreUpdate = requires(T &t) { t.preUpdate(); };
 
 template <typename T>
@@ -145,6 +150,28 @@ template <typename WorldType, typename SessionType>
   requires IsGameWorld<WorldType> && IsConnectionSession<SessionType, WorldType>
 class Engine {
 private:
+  void banSession(int fd) {
+    auto activeSession_it = m_sessions.find(fd);
+    if (activeSession_it != m_sessions.end()) {
+      if (m_enableAuth) {
+        m_userStore.banUser(activeSession_it->second.core.user_name);
+      }
+      activeSession_it->second.context->onDisconnect(m_world);
+      m_sessions.erase(activeSession_it);
+    } else {
+      m_authenticatingSessions.erase(fd);
+    }
+
+    close(fd);
+
+    auto it = std::find_if(m_pollFds.begin(), m_pollFds.end(),
+                           [fd](const auto &pfd) { return (int)pfd.fd == fd; });
+    if (it != m_pollFds.end()) {
+      *it = m_pollFds.back();
+      m_pollFds.pop_back();
+    }
+  }
+
   bool m_enableAuth;
   UserStore m_userStore;
   int m_port;
@@ -471,6 +498,13 @@ public:
 
       // 3-B. サーバー側のグローバル更新
       m_world.globalUpdate(deltaTime);
+
+      if constexpr (HasKickFds<WorldType>) {
+        auto kickFds = m_world.getKickFds();
+        for (int fd : kickFds) {
+          banSession(fd);
+        }
+      }
 
       if constexpr (HasSessionPostUpdate<SessionType, WorldType>) {
         for (auto &[fd, session] : m_sessions) {
