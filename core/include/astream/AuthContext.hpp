@@ -1,4 +1,5 @@
 #pragma once
+#include "astream/util/StringUtil.hpp"
 #include <astream/GraphicsDevice.hpp>
 #include <astream/InputDevice.hpp>
 #include <astream/UserStore.hpp>
@@ -67,9 +68,8 @@ public:
 
       if (input.getKeyDown(Key::Enter)) {
         std::string currentInput = m_inputLine.str();
+        astream::util::trim_inplace(currentInput);
         if (!currentInput.empty()) {
-          std::erase_if(currentInput,
-                        [](unsigned char c) { return std::isspace(c); });
           m_username = currentInput;
           m_state = State::InputPassword;
           m_inputLine.clear();
@@ -85,8 +85,7 @@ public:
 
       if (input.getKeyDown(Key::Enter)) {
         std::string currentInput = m_inputLine.str();
-        std::erase_if(currentInput,
-                      [](unsigned char c) { return std::isspace(c); });
+        astream::util::trim_inplace(currentInput);
         m_password = currentInput;
         m_inputLine.clear();
 

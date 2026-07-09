@@ -187,9 +187,11 @@ private:
   float m_targetFps = 30.0f;
 
 public:
-  Engine(int port = 12345, float targetFps = 30.0f, bool enableAuth = false)
+  Engine(int port = 12345, float targetFps = 30.0f, bool enableAuth = false,
+         RegisterPolicy policy = RegisterPolicy::AdminOnly)
       : m_enableAuth(enableAuth), m_port(port),
-        m_targetFps(targetFps > 0.0f ? targetFps : 30.0f) {}
+        m_targetFps(targetFps > 0.0f ? targetFps : 30.0f), m_userStore(policy) {
+  }
   ~Engine() {
     if (m_serverSock >= 0) {
       close(m_serverSock);
