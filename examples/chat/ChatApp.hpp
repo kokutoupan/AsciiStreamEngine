@@ -71,11 +71,12 @@ public:
     }
   }
 
-  void addPlayer(int clientId) {
+  void addPlayer(int clientId, const std::string &name) {
     PlayerState p;
-    p.name = "User_" + std::to_string(clientId);
+    p.name = name;
     m_players.emplace(clientId, std::move(p));
-    m_chatLog.push_back("*** System: " + p.name + " entered the chat ***");
+    m_chatLog.push_back("*** System: " + m_players[clientId].name +
+                        " entered the chat ***");
     markChanged();
   }
 
@@ -102,11 +103,12 @@ public:
   ChatSession() = default;
 
   // Matches IsConnectionSession requirement
-  void init(int clientId, int w, int h, ChatWorld &world) {
+  void init(int clientId, int w, int h, const std::string &user_name,
+            ChatWorld &world) {
     m_clientId = clientId;
     m_width = w;
     m_height = h;
-    world.addPlayer(clientId);
+    world.addPlayer(clientId, user_name);
   }
 
   // Matches IsConnectionSession requirement

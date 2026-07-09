@@ -77,10 +77,11 @@ concept HasPostUpdate = requires(T &t) { t.postUpdate(); };
 
 template <typename Session, typename World>
 concept IsConnectionSession =
-    requires(Session s, int clientId, int w, int h, World &world,
+    requires(Session s, int clientId, int w, int h,
+             const std::string &user_name, World &world,
              const World &const_world, const InputDevice &input,
              TextureView<char> buf) {
-      { s.init(clientId, w, h, world) } -> std::same_as<void>;
+      { s.init(clientId, w, h, user_name, world) } -> std::same_as<void>;
       { s.onDisconnect(world) } -> std::same_as<void>;
       { s.update(clientId, input, world) } -> std::same_as<void>;
       { s.render(buf, const_world) } -> std::same_as<bool>;
@@ -144,7 +145,7 @@ template <typename WorldType, typename SessionType>
   requires IsGameWorld<WorldType> && IsConnectionSession<SessionType, WorldType>
 class Engine {
 private:
-  constexpr static bool enableAuth = true;
+  bool m_enableAuth;
   UserStore m_userStore;
   int m_port;
   int m_serverSock = -1;
@@ -186,8 +187,9 @@ private:
   float m_targetFps = 30.0f;
 
 public:
-  Engine(int port = 12345, float targetFps = 30.0f)
-      : m_port(port), m_targetFps(targetFps > 0.0f ? targetFps : 30.0f) {}
+  Engine(int port = 12345, float targetFps = 30.0f, bool enableAuth = false)
+      : m_enableAuth(enableAuth), m_port(port),
+        m_targetFps(targetFps > 0.0f ? targetFps : 30.0f) {}
   ~Engine() {
     if (m_serverSock >= 0) {
       close(m_serverSock);
@@ -347,7 +349,7 @@ public:
             sessionCore.colorBuffer = std::make_unique<Texture2D<char>>(
                 sessionCore.width, sessionCore.height, ' ');
 
-            if (!enableAuth) {
+            if (!m_enableAuth) {
 
               sessionCore.user_name = "Guest_" + std::to_string(fd);
               ActiveSession session;
@@ -355,7 +357,8 @@ public:
               session.core = std::move(sessionCore);
 
               m_sessions[fd] = std::move(session);
-              m_sessions[fd].context->init(fd, w, h, m_world);
+              m_sessions[fd].context->init(
+                  fd, w, h, m_sessions[fd].core.user_name, m_world);
               continue;
 
             } else {
@@ -439,10 +442,12 @@ public:
 
           // m_sessions 側に所有権をムーブ
           session.core = std::move(authing.core);
+          session.core.user_name = result.username;
 
           m_sessions[fd] = std::move(session);
           m_sessions[fd].context->init(fd, m_sessions[fd].core.width,
-                                       m_sessions[fd].core.height, m_world);
+                                       m_sessions[fd].core.height,
+                                       m_sessions[fd].core.user_name, m_world);
 
           authing_it = m_authenticatingSessions.erase(authing_it);
         } else {

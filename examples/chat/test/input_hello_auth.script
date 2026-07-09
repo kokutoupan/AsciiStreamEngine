@@ -2,6 +2,18 @@
 # Wait for server connection to be fully established and initial screen sent
 wait 200
 
+# Register
+type 2
+key enter
+wait 200
+type test
+key enter
+wait 200
+type test
+key enter
+
+wait 200
+
 # Type a test message to the chat
 type hello, this is an automated emulator test!
 wait 100
