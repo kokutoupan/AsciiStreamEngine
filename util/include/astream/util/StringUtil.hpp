@@ -18,9 +18,8 @@ namespace astream::util {
   auto start = std::ranges::find_if_not(
       sv, [](unsigned char c) { return std::isspace(c); });
   // 後方の空白をスキップ（逆方向イテレータ）
-  auto end =
-      std::ranges::find_if_not(sv | std::views::reverse,
-                               [](unsigned char c) { return std::isspace(c); });
+  auto end = std::ranges::find_if_not(
+        sv.rbegin(), sv.rend(), [](unsigned char c) { return std::isspace(c); });
 
   if (start == sv.end()) {
     return {}; // 全て空白だった場合
@@ -43,11 +42,9 @@ constexpr void trim_inplace(std::string &s) noexcept {
     s.clear();
     return;
   }
-
-  auto keep_end_idx = trimmed.end() - sv.begin();
+  auto keep_start_idx = trimmed.data() - sv.data();
+  auto keep_end_idx = keep_start_idx + trimmed.size();
   s.erase(s.begin() + keep_end_idx, s.end());
-
-  auto keep_start_idx = trimmed.begin() - sv.begin();
   s.erase(s.begin(), s.begin() + keep_start_idx);
 }
 
