@@ -174,8 +174,9 @@ private:
     // 1. OSの乱数生成器でセキュアなソルト（16バイト）を生成
     uint8_t salt[16];
     std::random_device rd;
-    for (auto &s : salt) {
-      s = static_cast<uint8_t>(rd());
+    auto *salt_u32 = reinterpret_cast<uint32_t *>(salt);
+    for (size_t i = 0; i < 4; ++i) {
+      salt_u32[i] = rd();
     }
 
     // 2. ハッシュ化（Argon2idを使用）
