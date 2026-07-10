@@ -1,8 +1,11 @@
 #pragma once
 
+#include <argon2.h>
+
 #include <fstream>
 #include <iostream>
 #include <print>
+#include <random>
 #include <sstream>
 #include <string>
 #include <string_view>
@@ -166,13 +169,35 @@ private:
 
   std::string m_filePath;
 
-  // パスワードハッシュ化ラッパー (bcryptやargon2などのライブラリをそのうち使う)
+  // パスワードハッシュ化
   std::string hashPassword(std::string_view password) const {
-    return "hashed_" + std::string(password); // 概念用のダミー
+    // 1. OSの乱数生成器でセキュアなソルト（16バイト）を生成
+    uint8_t salt[16];
+    std::random_device rd;
+    for (auto &s : salt) {
+      s = static_cast<uint8_t>(rd());
+    }
+
+    // 2. ハッシュ化（Argon2idを使用）
+    char encoded[256]; // エンコード結果を入れる十分なサイズのバッファ
+    int result = argon2id_hash_encoded(
+        2, 65536, 1, // 反復回数, メモリ(KB), スレッド数
+        password.data(), password.size(), salt, sizeof(salt),
+        32, // 生成されるハッシュ長
+        encoded, sizeof(encoded));
+
+    if (result != ARGON2_OK) {
+      throw std::runtime_error("Hashing failed");
+    }
+    return std::string(encoded);
   }
 
   bool verifyPassword(std::string_view password,
                       std::string_view hash) const noexcept {
-    return hash == ("hashed_" + std::string(password)); // 概念用のダミー
+
+    std::string hash_str(hash);
+
+    return argon2id_verify(hash_str.c_str(), password.data(),
+                           password.size()) == ARGON2_OK;
   }
 };
