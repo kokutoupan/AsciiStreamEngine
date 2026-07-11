@@ -11,6 +11,9 @@
 #include <vector>
 #include <zlib.h>
 
+#include <astream/AuthContext.hpp>
+#include <astream/UserStore.hpp>
+
 // =============================================================================
 // OS固有のネットワーク・システムコールヘッダーの切り替え
 // =============================================================================
@@ -67,6 +70,11 @@ concept IsGameWorld =
     };
 
 template <typename T>
+concept HasKickFds = requires(T &t) {
+  { t.getKickFds() } -> std::same_as<std::vector<int>>;
+};
+
+template <typename T>
 concept HasPreUpdate = requires(T &t) { t.preUpdate(); };
 
 template <typename T>
@@ -74,10 +82,11 @@ concept HasPostUpdate = requires(T &t) { t.postUpdate(); };
 
 template <typename Session, typename World>
 concept IsConnectionSession =
-    requires(Session s, int clientId, int w, int h, World &world,
+    requires(Session s, int clientId, int w, int h,
+             const std::string &user_name, World &world,
              const World &const_world, const InputDevice &input,
              TextureView<char> buf) {
-      { s.init(clientId, w, h, world) } -> std::same_as<void>;
+      { s.init(clientId, w, h, user_name, world) } -> std::same_as<void>;
       { s.onDisconnect(world) } -> std::same_as<void>;
       { s.update(clientId, input, world) } -> std::same_as<void>;
       { s.render(buf, const_world) } -> std::same_as<bool>;
@@ -125,6 +134,15 @@ inline int send_engine_frame_compressed(int sock, const char *raw_data,
   return send(sock, (const char *)comp_buf.data(), (int)comp_len, 0);
 }
 
+// エラーが「データがまだ届いてないだけ（正常）」かどうかを判定するヘルパー
+inline bool IsWouldBlock() {
+#if defined(_WIN32)
+  return WSAGetLastError() == WSAEWOULDBLOCK;
+#else
+  return errno == EAGAIN || errno == EWOULDBLOCK;
+#endif
+}
+
 // =============================================================================
 // エンジンコアクラス
 // =============================================================================
@@ -132,6 +150,30 @@ template <typename WorldType, typename SessionType>
   requires IsGameWorld<WorldType> && IsConnectionSession<SessionType, WorldType>
 class Engine {
 private:
+  void banSession(int fd) {
+    auto activeSession_it = m_sessions.find(fd);
+    if (activeSession_it != m_sessions.end()) {
+      if (m_enableAuth) {
+        m_userStore.banUser(activeSession_it->second.core.user_name);
+      }
+      activeSession_it->second.context->onDisconnect(m_world);
+      m_sessions.erase(activeSession_it);
+    } else {
+      m_authenticatingSessions.erase(fd);
+    }
+
+    close(fd);
+
+    auto it = std::find_if(m_pollFds.begin(), m_pollFds.end(),
+                           [fd](const auto &pfd) { return (int)pfd.fd == fd; });
+    if (it != m_pollFds.end()) {
+      *it = m_pollFds.back();
+      m_pollFds.pop_back();
+    }
+  }
+
+  bool m_enableAuth;
+  UserStore m_userStore;
   int m_port;
   int m_serverSock = -1;
 
@@ -144,23 +186,39 @@ private:
 
   WorldType m_world; // サーバー上に1つだけ実体化する世界の真実
 
-  struct ClientSession {
+  struct SessionCore {
     int fd;
     int width = 80;
     int height = 24;
-    bool size_initialized = false;
     InputDevice input;
-    std::unique_ptr<SessionType> context;
+    std::string user_name;
     std::unique_ptr<Texture2D<char>> colorBuffer;
     std::vector<uint8_t> compressedBuffer;
   };
 
-  std::unordered_map<int, ClientSession> m_sessions;
+  // 認証中のセッション
+  struct AuthenticatingSession {
+    SessionCore core; // 共通要素
+    std::unique_ptr<AuthContext> authContext;
+  };
+
+  // 認証後のアクティブなセッション
+  struct ActiveSession {
+    SessionCore core; // 共通要素
+    std::unique_ptr<SessionType> context;
+  };
+
+  std::unordered_map<int, AuthenticatingSession> m_authenticatingSessions;
+  std::unordered_map<int, ActiveSession> m_sessions;
+
   float m_targetFps = 30.0f;
 
 public:
-  Engine(int port = 12345, float targetFps = 30.0f)
-      : m_port(port), m_targetFps(targetFps > 0.0f ? targetFps : 30.0f) {}
+  Engine(int port = 12345, float targetFps = 30.0f, bool enableAuth = false,
+         RegisterPolicy policy = RegisterPolicy::AdminOnly)
+      : m_enableAuth(enableAuth), m_port(port),
+        m_targetFps(targetFps > 0.0f ? targetFps : 30.0f), m_userStore(policy) {
+  }
   ~Engine() {
     if (m_serverSock >= 0) {
       close(m_serverSock);
@@ -272,11 +330,6 @@ public:
 #else
           m_pollFds.push_back({client_sock, POLLIN, 0});
 #endif
-
-          ClientSession session;
-          session.fd = client_sock;
-          session.context = std::make_unique<SessionType>();
-          m_sessions[client_sock] = std::move(session);
         }
       }
 
@@ -284,9 +337,21 @@ public:
       for (size_t i = 1; i < m_pollFds.size(); ++i) {
         int fd = (int)m_pollFds[i].fd;
         if (m_pollFds[i].revents & POLLIN) {
-          auto &session = m_sessions[fd];
 
-          if (!session.size_initialized) {
+          auto activeSession_it = m_sessions.find(fd);
+
+          auto authing_it = m_authenticatingSessions.find(fd);
+          // if (activeSession_it == m_sessions.end()) {
+          //   auto authing_it = m_authenticatingSessions.find(fd);
+          // }
+
+          // 初期コネクション前
+          if (activeSession_it == m_sessions.end() &&
+              authing_it == m_authenticatingSessions.end()) {
+
+            SessionCore sessionCore;
+            sessionCore.fd = fd;
+
             uint16_t size_packet[2] = {0, 0};
             int len = recv(fd, (char *)size_packet, sizeof(size_packet), 0);
             if (len <= 0) {
@@ -296,19 +361,46 @@ public:
               --i;
               continue;
             }
-            session.width = ntohs(size_packet[0]);
-            session.height = ntohs(size_packet[1]);
-            if (session.width < 1)
-              session.width = 80;
-            if (session.height < 1)
-              session.height = 24;
+            int w = ntohs(size_packet[0]);
+            int h = ntohs(size_packet[1]);
+            sessionCore.width = w;
+            sessionCore.height = h;
 
-            session.context->init(fd, session.width, session.height, m_world);
-            session.colorBuffer = std::make_unique<Texture2D<char>>(
-                session.width, session.height, ' ');
+            if (w < 1)
+              sessionCore.width = 80;
+            else if (w > 254)
+              sessionCore.width = 254;
+            if (h < 1)
+              sessionCore.height = 24;
+            else if (h > 254)
+              sessionCore.height = 254;
 
-            session.size_initialized = true;
+            sessionCore.colorBuffer = std::make_unique<Texture2D<char>>(
+                sessionCore.width, sessionCore.height, ' ');
+
+            if (!m_enableAuth) {
+
+              sessionCore.user_name = "Guest_" + std::to_string(fd);
+              ActiveSession session;
+              session.context = std::make_unique<SessionType>();
+              session.core = std::move(sessionCore);
+
+              m_sessions[fd] = std::move(session);
+              m_sessions[fd].context->init(
+                  fd, w, h, m_sessions[fd].core.user_name, m_world);
+              continue;
+
+            } else {
+              AuthenticatingSession session;
+
+              session.authContext = std::make_unique<AuthContext>(&m_userStore);
+              session.core = std::move(sessionCore);
+
+              m_authenticatingSessions[fd] = std::move(session);
+              continue;
+            }
           } else {
+
             char recv_buf[64];
 #if defined(_WIN32)
             // あらかじめ非ブロッキング化しているため、MSG_DONTWAIT不要で0指定
@@ -317,24 +409,79 @@ public:
             int n = recv(fd, recv_buf, sizeof(recv_buf), MSG_DONTWAIT);
 #endif
             if (n > 0) {
-              for (int j = 0; j < n; ++j)
-                session.input.pressKey(recv_buf[j]);
-            } else if (n == 0 || (n < 0 &&
-#if defined(_WIN32)
-                                  WSAGetLastError() != WSAEWOULDBLOCK
-#else
-                                  errno != EAGAIN && errno != EWOULDBLOCK
-#endif
-                                  )) {
-              // エラーまたは正常切断時のクリーンアップ処理
-              session.context->onDisconnect(m_world);
+              for (int j = 0; j < n; ++j) {
+
+                if (activeSession_it != m_sessions.end()) {
+
+                  auto &session = activeSession_it->second;
+                  session.core.input.pressKey(recv_buf[j]);
+                } else {
+                  authing_it->second.core.input.pressKey(recv_buf[j]);
+                }
+              }
+            } else if (n == 0 || (n < 0 && !IsWouldBlock())) {
+              if (activeSession_it != m_sessions.end()) {
+
+                // エラーまたは正常切断時のクリーンアップ処理
+                activeSession_it->second.context->onDisconnect(m_world);
+                m_sessions.erase(activeSession_it);
+              }
+              // 認証中だった場合は、認証中のマップから消す
+              else {
+                m_authenticatingSessions.erase(authing_it);
+              }
+
               close(fd);
               m_pollFds[i] = m_pollFds.back();
               m_pollFds.pop_back();
               --i;
+
               continue;
             }
           }
+        }
+      }
+
+      // イテレータを使って全要素をループ
+      auto authing_it = m_authenticatingSessions.begin();
+      while (authing_it != m_authenticatingSessions.end()) {
+
+        // 認証中のセッション参照を取得
+        auto &authing = authing_it->second;
+
+        int fd = authing.core.fd;
+
+        // アップデート処理
+        const AuthResult &result =
+            authing.authContext->update(fd, authing.core.input);
+        const bool isDirty =
+            authing.authContext->render(authing.core.colorBuffer->view());
+
+        if (isDirty)
+          send_engine_frame_compressed(
+              authing.core.fd, authing.core.colorBuffer->data(),
+              authing.core.colorBuffer->size(), authing.core.width,
+              authing.core.height, authing.core.compressedBuffer);
+
+        authing.core.input.nextFrame();
+
+        if (result.success) {
+          ActiveSession session;
+          session.context = std::make_unique<SessionType>();
+
+          // m_sessions 側に所有権をムーブ
+          session.core = std::move(authing.core);
+          session.core.user_name = result.username;
+
+          m_sessions[fd] = std::move(session);
+          m_sessions[fd].context->init(fd, m_sessions[fd].core.width,
+                                       m_sessions[fd].core.height,
+                                       m_sessions[fd].core.user_name, m_world);
+
+          authing_it = m_authenticatingSessions.erase(authing_it);
+        } else {
+          // 削除しなかった場合のみ、自力でイテレータを次に進める
+          ++authing_it;
         }
       }
 
@@ -345,59 +492,61 @@ public:
 
       // 3-A. 各プレイヤーの入力をワールド側に流し込んで集約
       for (auto &[fd, session] : m_sessions) {
-        if (!session.size_initialized)
-          continue;
-        session.input.setDeltaTime(deltaTime);
-        session.context->update(fd, session.input, m_world);
+        session.core.input.setDeltaTime(deltaTime);
+        session.context->update(fd, session.core.input, m_world);
       }
 
       // 3-B. サーバー側のグローバル更新
       m_world.globalUpdate(deltaTime);
 
+      if constexpr (HasKickFds<WorldType>) {
+        auto kickFds = m_world.getKickFds();
+        for (int fd : kickFds) {
+          banSession(fd);
+        }
+      }
+
       if constexpr (HasSessionPostUpdate<SessionType, WorldType>) {
         for (auto &[fd, session] : m_sessions) {
-          if (!session.size_initialized)
-            continue;
-          session.input.setDeltaTime(deltaTime);
+          session.core.input.setDeltaTime(deltaTime);
           session.context->postUpdate(fd, m_world);
         }
       }
 
       // 3-C. 各プレイヤー視点での独立描画・コピー・最速送信
 
-      std::vector<ClientSession *> active_sessions;
+      std::vector<ActiveSession *> active_sessions;
       active_sessions.reserve(m_sessions.size());
 
       for (auto &[fd, session] : m_sessions) {
-        if (session.size_initialized) {
-          active_sessions.push_back(&session);
-        }
+        active_sessions.push_back(&session);
       }
       // 2. 集めたセッションに対して、並列実行
       const auto &const_world = m_world;
 
-      std::for_each(std::execution::par, active_sessions.begin(),
-                    active_sessions.end(),
-                    [&const_world](ClientSession *session_ptr) {
-                      auto &session = *session_ptr;
+      std::for_each(
+          std::execution::par, active_sessions.begin(), active_sessions.end(),
+          [&const_world](ActiveSession *session_ptr) {
+            auto &session = *session_ptr;
 
-                      // [A] 各プレイヤー視点での描画（const world を渡す）
-                      bool should_send = session.context->render(
-                          session.colorBuffer->view(), const_world);
+            // [A] 各プレイヤー視点での描画（const world を渡す）
+            bool should_send = session.context->render(
+                session.core.colorBuffer->view(), const_world);
 
-                      // [B]
-                      // 圧縮と送信（スレッドごとに個別に実行されるため、重いcompressが並列化される）
-                      if (should_send) {
-                        send_engine_frame_compressed(
-                            session.fd, session.colorBuffer->data(),
-                            session.colorBuffer->size(), session.width,
-                            session.height, session.compressedBuffer);
-                      }
-                    });
+            // [B]
+            // 圧縮と送信（スレッドごとに個別に実行されるため、重いcompressが並列化される）
+            if (should_send) {
+              send_engine_frame_compressed(
+                  session.core.fd, session.core.colorBuffer->data(),
+                  session.core.colorBuffer->size(), session.core.width,
+                  session.core.height, session.core.compressedBuffer);
+            }
+          });
 
-      // 3. 次フレームへの入力状態の遷移は、メインスレッドに戻って安全に一括処理
+      // 3.
+      // 次フレームへの入力状態の遷移は、メインスレッドに戻って安全に一括処理
       for (auto *session_ptr : active_sessions) {
-        session_ptr->input.nextFrame();
+        session_ptr->core.input.nextFrame();
       }
 
       if constexpr (HasPostUpdate<WorldType>) {
@@ -406,9 +555,7 @@ public:
 
       if constexpr (HasSessionEndFrame<SessionType, WorldType>) {
         for (auto &[fd, session] : m_sessions) {
-          if (!session.size_initialized)
-            continue;
-          session.input.setDeltaTime(deltaTime);
+          session.core.input.setDeltaTime(deltaTime);
           session.context->endFrame(fd, m_world);
         }
       }

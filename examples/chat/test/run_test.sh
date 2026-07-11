@@ -8,7 +8,7 @@ ROOT_DIR="$(cd "$SCRIPT_DIR/../../.." && pwd)"
 PORT=12345
 SERVER_BIN="$ROOT_DIR/build/examples/demo_chat"
 CLIENT_BIN="$ROOT_DIR/build/client/ascii_emulator"
-SCRIPT_FILE="$SCRIPT_DIR/input_hello.script"
+SCRIPT_FILE="$SCRIPT_DIR/input_hello_auth.script"
 
 # Check if binaries exist
 if [ ! -f "$SERVER_BIN" ] || [ ! -f "$CLIENT_BIN" ]; then

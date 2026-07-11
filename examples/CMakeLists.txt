@@ -32,7 +32,6 @@ add_executable(demo_cube_multiplayer
 target_link_libraries(demo_cube_multiplayer PRIVATE
     astream_core
     astream_util
-    ${LIBS} ZLIB::ZLIB glm::glm
     EnTT::EnTT
     Jolt
 )
@@ -44,9 +43,9 @@ astream_compile_assets(demo_cube_multiplayer
 
 # レンダリングのみ
 add_executable(render_only renderer_sample.cpp)
-target_link_libraries(render_only PRIVATE astream_core ${LIBS} glm::glm)
+target_link_libraries(render_only PRIVATE astream_core)
 
 # チャットアプリサンプル
 add_executable(demo_chat chat/main.cpp)
-target_link_libraries(demo_chat PRIVATE astream_core astream_util ${LIBS} ZLIB::ZLIB)
+target_link_libraries(demo_chat PRIVATE astream_core astream_util)
 

@@ -15,6 +15,7 @@
 class ChatWorld {
 private:
   bool m_frameChanged = false; // このフレーム内で変更があったか
+  std::vector<int> m_kickFds;
 public:
   struct PlayerState {
     std::string name;
@@ -37,6 +38,12 @@ public:
 
   void postUpdate() { clearFrameChangedFlag(); };
 
+  std::vector<int> getKickFds() {
+    std::vector<int> fds = std::move(m_kickFds);
+    m_kickFds.clear();
+    return fds;
+  }
+
   // Matches IsGameWorld requirement
   void processPlayerInput(int clientId, const InputDevice &input) {
     auto it = m_players.find(clientId);
@@ -54,8 +61,28 @@ public:
       msg.erase(std::remove(msg.begin(), msg.end(), '\r'), msg.end());
 
       if (!msg.empty()) {
-        m_chatLog.push_back(it->second.name + ": " + msg);
-        markChanged();
+        if (msg.starts_with("/ban ")) {
+          std::string target_name = msg.substr(5);
+          target_name.erase(std::remove(target_name.begin(), target_name.end(), ' '), target_name.end());
+
+          int target_fd = -1;
+          for (const auto &[fd, p] : m_players) {
+            if (p.name == target_name) {
+              target_fd = fd;
+              break;
+            }
+          }
+          if (target_fd != -1) {
+            m_kickFds.push_back(target_fd);
+            m_chatLog.push_back("*** System: " + target_name + " was banned by " + it->second.name + " ***");
+          } else {
+            m_chatLog.push_back("*** System: User " + target_name + " not found ***");
+          }
+          markChanged();
+        } else {
+          m_chatLog.push_back(it->second.name + ": " + msg);
+          markChanged();
+        }
       }
       it->second.inputLine.clear();
     }
@@ -71,11 +98,12 @@ public:
     }
   }
 
-  void addPlayer(int clientId) {
+  void addPlayer(int clientId, const std::string &name) {
     PlayerState p;
-    p.name = "User_" + std::to_string(clientId);
+    p.name = name;
     m_players.emplace(clientId, std::move(p));
-    m_chatLog.push_back("*** System: " + p.name + " entered the chat ***");
+    m_chatLog.push_back("*** System: " + m_players[clientId].name +
+                        " entered the chat ***");
     markChanged();
   }
 
@@ -102,11 +130,12 @@ public:
   ChatSession() = default;
 
   // Matches IsConnectionSession requirement
-  void init(int clientId, int w, int h, ChatWorld &world) {
+  void init(int clientId, int w, int h, const std::string &user_name,
+            ChatWorld &world) {
     m_clientId = clientId;
     m_width = w;
     m_height = h;
-    world.addPlayer(clientId);
+    world.addPlayer(clientId, user_name);
   }
 
   // Matches IsConnectionSession requirement

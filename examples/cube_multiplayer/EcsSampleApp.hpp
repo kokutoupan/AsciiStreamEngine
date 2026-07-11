@@ -407,7 +407,7 @@ public:
     planeIndices = {0, 2, 1, 0, 3, 2};
   }
 
-  void init(int clientId, int width, int height, EcsGameWorld &world) override {
+  void init(int clientId, int width, int height, const std::string &user_name, EcsGameWorld &world) override {
     m_lastFrameTime = std::chrono::steady_clock::now();
 
     m_clientId = clientId;
