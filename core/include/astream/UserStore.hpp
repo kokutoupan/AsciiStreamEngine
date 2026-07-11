@@ -170,6 +170,7 @@ private:
   std::string m_filePath;
 
   // パスワードハッシュ化
+  // TODO: そのうち非同期にするかも
   std::string hashPassword(std::string_view password) const {
     // 1. OSの乱数生成器でセキュアなソルト（16バイト）を生成
     uint8_t salt[16];
@@ -182,7 +183,7 @@ private:
     // 2. ハッシュ化（Argon2idを使用）
     char encoded[256]; // エンコード結果を入れる十分なサイズのバッファ
     int result = argon2id_hash_encoded(
-        2, 65536, 1, // 反復回数, メモリ(KB), スレッド数
+        1, 16384, 1, // 反復回数, メモリ(KB), スレッド数
         password.data(), password.size(), salt, sizeof(salt),
         32, // 生成されるハッシュ長
         encoded, sizeof(encoded));
