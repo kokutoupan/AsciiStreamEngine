@@ -21,6 +21,7 @@ else()
   message(WARNING "IPO/LTO is not supported on this platform: ${ipo_error}")
 endif()
 
+include(FetchContent)
 find_package(ZLIB)
 
 if(ZLIB_FOUND)
@@ -29,7 +30,6 @@ if(ZLIB_FOUND)
 else()
   message(STATUS "System ZLIB not found. Downloading via FetchContent...")
 
-  include(FetchContent)
   FetchContent_Declare(
         zlib
         GIT_REPOSITORY https://github.com/madler/zlib.git
@@ -51,7 +51,6 @@ endif()
 # ==========================================
 # 1. GLMの追加 (FetchContent)
 # ==========================================
-include(FetchContent)
 
 FetchContent_Declare(
     glm
@@ -65,6 +64,25 @@ set(GLM_TEST_ENABLE OFF CACHE INTERNAL "")
 # GLMをダウンロードして CMake のターゲットとして利用可能にする
 FetchContent_MakeAvailable(glm)
 
+
+# Monocypherの指定されたコミットをダウンロード
+FetchContent_Declare(
+    monocypher
+    GIT_REPOSITORY https://github.com/LoupVaillant/Monocypher.git
+    GIT_TAG        4.0.3
+)
+
+# ダウンロードを実行し、ソースディレクトリを変数に設定
+FetchContent_MakeAvailable(monocypher)
+
+add_library(monocypher STATIC
+    ${monocypher_SOURCE_DIR}/src/monocypher.c
+)
+
+target_include_directories(monocypher PUBLIC
+    ${monocypher_SOURCE_DIR}/src
+)
+
 # 数学ライブラリのリンクが必要な場合があるため
 if(UNIX)
   set(LIBS m)
@@ -72,6 +90,7 @@ elseif(WIN32)
   set(LIBS ws2_32) # 先述のWindows用ソケット
 endif()
 
+list(APPEND LIBS monocypher)
 
 # =============================================================================
 # エンジン補助機能: OBJアセットをC++ソースにコンパイルするマクロ

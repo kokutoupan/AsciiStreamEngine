@@ -10,9 +10,11 @@
 #include <unordered_map>
 #include <vector>
 #include <zlib.h>
+#include <random>
 
 #include <astream/AuthContext.hpp>
 #include <astream/UserStore.hpp>
+#include <astream/EncryptedStream.hpp>
 
 // =============================================================================
 // OS固有のネットワーク・システムコールヘッダーの切り替え
@@ -106,7 +108,8 @@ concept HasSessionEndFrame =
 inline int send_engine_frame_compressed(int sock, const char *raw_data,
                                         size_t raw_len, uint8_t width,
                                         uint8_t height,
-                                        std::vector<uint8_t> &comp_buf) {
+                                        std::vector<uint8_t> &comp_buf,
+                                        EncryptedStream &stream) {
   // 1. 必要十分な圧縮バッファを確保（初回やサイズ変更時のみ resize が走る）
   uLongf max_comp_len = compressBound(raw_len);
   if (comp_buf.size() != max_comp_len) {
@@ -120,18 +123,31 @@ inline int send_engine_frame_compressed(int sock, const char *raw_data,
   if (res != Z_OK)
     return -1;
 
-  // 3. サイズ（4バイト）を送信
-  uint32_t net_len = htonl((uint32_t)comp_len);
-  if (send(sock, (const char *)&net_len, sizeof(net_len), 0) <= 0)
-    return -1;
+  if (stream.get_mode() == EncryptedStream::Mode::Plaintext) {
+    // 3. サイズ（4バイト）を送信
+    uint32_t net_len = htonl((uint32_t)comp_len);
+    if (send(sock, (const char *)&net_len, sizeof(net_len), 0) <= 0)
+      return -1;
 
-  // 4. width と height（計2バイト）を直接送信
-  uint8_t meta[2] = {width, height};
-  if (send(sock, (const char *)meta, sizeof(meta), 0) <= 0)
-    return -1;
+    // 4. width と height（計2バイト）を直接送信
+    uint8_t meta[2] = {width, height};
+    if (send(sock, (const char *)meta, sizeof(meta), 0) <= 0)
+      return -1;
 
-  // 5. 圧縮データを送信
-  return send(sock, (const char *)comp_buf.data(), (int)comp_len, 0);
+    // 5. 圧縮データを送信
+    return send(sock, (const char *)comp_buf.data(), (int)comp_len, 0);
+  } else {
+    // Encrypted mode: construct payload [4 bytes net_len] [1 byte width] [1 byte height] [comp_len bytes compressed data]
+    std::vector<uint8_t> payload(6 + comp_len);
+    uint32_t net_len = htonl((uint32_t)comp_len);
+    std::memcpy(payload.data(), &net_len, 4);
+    payload[4] = width;
+    payload[5] = height;
+    std::memcpy(payload.data() + 6, comp_buf.data(), comp_len);
+
+    std::vector<uint8_t> wrapped = stream.wrap_outgoing(payload.data(), payload.size());
+    return send(sock, (const char *)wrapped.data(), (int)wrapped.size(), 0);
+  }
 }
 
 // エラーが「データがまだ届いてないだけ（正常）」かどうかを判定するヘルパー
@@ -141,6 +157,65 @@ inline bool IsWouldBlock() {
 #else
   return errno == EAGAIN || errno == EWOULDBLOCK;
 #endif
+}
+
+inline int recv_exact(int fd, void *buf, size_t len) {
+  size_t recvd = 0;
+  char *p = (char *)buf;
+  while (recvd < len) {
+    int n = recv(fd, p + recvd, len - recvd, 0);
+    if (n == 0) return 0; // closed
+    if (n < 0) {
+      if (IsWouldBlock()) {
+        std::this_thread::sleep_for(std::chrono::milliseconds(1));
+        continue;
+      }
+      return -1; // error
+    }
+    recvd += n;
+  }
+  return (int)recvd;
+}
+
+inline int recv_encrypted_frame(int fd, EncryptedStream &stream, std::vector<uint8_t> &out_plain) {
+  uint8_t header[2];
+#if defined(_WIN32)
+  int n = recv(fd, (char*)header, 2, MSG_PEEK);
+#else
+  int n = recv(fd, (char*)header, 2, MSG_PEEK | MSG_DONTWAIT);
+#endif
+  if (n < 2) {
+    if (n < 0 && IsWouldBlock()) return 0;
+    return -1; // Closed or error
+  }
+
+  uint16_t size = (header[0] << 8) | header[1];
+  size_t frame_size = 2 + size + 16;
+
+  // Peek the entire frame
+  std::vector<uint8_t> peek_buf(frame_size);
+#if defined(_WIN32)
+  n = recv(fd, (char*)peek_buf.data(), frame_size, MSG_PEEK);
+#else
+  n = recv(fd, (char*)peek_buf.data(), frame_size, MSG_PEEK | MSG_DONTWAIT);
+#endif
+  if (n < (int)frame_size) {
+    if (n < 0 && IsWouldBlock()) return 0;
+    return 0; // Wait for next poll
+  }
+
+  // Consume the frame
+  std::vector<uint8_t> frame(frame_size);
+  int read_bytes = recv_exact(fd, frame.data(), frame_size);
+  if (read_bytes != (int)frame_size) {
+    return -1;
+  }
+
+  if (!stream.unwrap_incoming(frame, out_plain)) {
+    return -1;
+  }
+
+  return (int)out_plain.size();
 }
 
 // =============================================================================
@@ -176,6 +251,8 @@ private:
   UserStore m_userStore;
   int m_port;
   int m_serverSock = -1;
+  bool m_enableEncryption = false;
+  std::unordered_map<int, EncryptedStream> m_pendingStreams;
 
   // 多重化バッファの型をOSネイティブなもので素直に書き分ける
 #if defined(_WIN32)
@@ -194,6 +271,7 @@ private:
     std::string user_name;
     std::unique_ptr<Texture2D<char>> colorBuffer;
     std::vector<uint8_t> compressedBuffer;
+    EncryptedStream stream;
   };
 
   // 認証中のセッション
@@ -215,9 +293,10 @@ private:
 
 public:
   Engine(int port = 12345, float targetFps = 30.0f, bool enableAuth = false,
-         RegisterPolicy policy = RegisterPolicy::AdminOnly)
+         RegisterPolicy policy = RegisterPolicy::AdminOnly, bool enableEncryption = false)
       : m_enableAuth(enableAuth), m_port(port),
-        m_targetFps(targetFps > 0.0f ? targetFps : 30.0f), m_userStore(policy) {
+        m_targetFps(targetFps > 0.0f ? targetFps : 30.0f), m_userStore(policy),
+        m_enableEncryption(enableEncryption) {
   }
   ~Engine() {
     if (m_serverSock >= 0) {
@@ -322,6 +401,57 @@ public:
         int client_sock = (int)accept(
             m_serverSock, (struct sockaddr *)&client_addr, &addr_len);
         if (client_sock >= 0) {
+          EncryptedStream stream;
+          if (m_enableEncryption) {
+            static thread_local std::mt19937 generator(std::random_device{}());
+            std::uniform_int_distribution<int> distribution(0, 255);
+            uint8_t server_secret_key[32];
+            for (auto &b : server_secret_key) b = static_cast<uint8_t>(distribution(generator));
+
+            uint8_t server_public_key[32];
+            crypto_x25519_public_key(server_public_key, server_secret_key);
+
+            uint8_t handshake[33];
+            handshake[0] = 1; // Encrypted mode
+            std::memcpy(handshake + 1, server_public_key, 32);
+            send(client_sock, (const char *)handshake, 33, 0);
+
+            uint8_t client_public_key[32];
+            if (recv_exact(client_sock, client_public_key, 32) != 32) {
+              close(client_sock);
+              continue;
+            }
+
+            uint8_t raw_shared_secret[32];
+            crypto_x25519(raw_shared_secret, server_secret_key, client_public_key);
+
+            uint8_t shared_key[32];
+            uint8_t tx_base_nonce[24];
+            uint8_t rx_base_nonce[24];
+
+            crypto_blake2b_keyed(shared_key, 32, raw_shared_secret, 32,
+                                 reinterpret_cast<const uint8_t *>("key"), 3);
+
+            uint8_t tx_nonce_buf[32];
+            crypto_blake2b_keyed(tx_nonce_buf, 32, raw_shared_secret, 32,
+                                 reinterpret_cast<const uint8_t *>("server_to_client"), 16);
+            std::memcpy(tx_base_nonce, tx_nonce_buf, 24);
+
+            uint8_t rx_nonce_buf[32];
+            crypto_blake2b_keyed(rx_nonce_buf, 32, raw_shared_secret, 32,
+                                 reinterpret_cast<const uint8_t *>("client_to_server"), 16);
+            std::memcpy(rx_base_nonce, rx_nonce_buf, 24);
+
+            stream.initialize_encryption(EncryptedStream::Mode::Encrypted, shared_key, tx_base_nonce, rx_base_nonce);
+          } else {
+            uint8_t mode_byte = 0; // Plaintext
+            send(client_sock, (const char *)&mode_byte, 1, 0);
+            uint8_t dummy[32] = {0};
+            stream.initialize_encryption(EncryptedStream::Mode::Plaintext, dummy, dummy, dummy);
+          }
+
+          m_pendingStreams[client_sock] = std::move(stream);
+
 #if defined(_WIN32)
           // Windows固有：MSG_DONTWAITの代わりに対象ソケットを非ブロッキングモードに切り替える
           unsigned long mode = 1;
@@ -352,17 +482,48 @@ public:
             SessionCore sessionCore;
             sessionCore.fd = fd;
 
-            uint16_t size_packet[2] = {0, 0};
-            int len = recv(fd, (char *)size_packet, sizeof(size_packet), 0);
-            if (len <= 0) {
+            auto it_stream = m_pendingStreams.find(fd);
+            if (it_stream == m_pendingStreams.end()) {
               close(fd);
               m_pollFds[i] = m_pollFds.back();
               m_pollFds.pop_back();
               --i;
               continue;
             }
-            int w = ntohs(size_packet[0]);
-            int h = ntohs(size_packet[1]);
+            sessionCore.stream = std::move(it_stream->second);
+            m_pendingStreams.erase(it_stream);
+
+            int w = 0;
+            int h = 0;
+
+            if (sessionCore.stream.get_mode() == EncryptedStream::Mode::Plaintext) {
+              uint16_t size_packet[2] = {0, 0};
+              int len = recv(fd, (char *)size_packet, sizeof(size_packet), 0);
+              if (len <= 0) {
+                close(fd);
+                m_pollFds[i] = m_pollFds.back();
+                m_pollFds.pop_back();
+                --i;
+                continue;
+              }
+              w = ntohs(size_packet[0]);
+              h = ntohs(size_packet[1]);
+            } else {
+              std::vector<uint8_t> out_plain;
+              int len = recv_encrypted_frame(fd, sessionCore.stream, out_plain);
+              if (len <= 0 || out_plain.size() < 4) {
+                close(fd);
+                m_pollFds[i] = m_pollFds.back();
+                m_pollFds.pop_back();
+                --i;
+                continue;
+              }
+              uint16_t size_packet[2];
+              std::memcpy(size_packet, out_plain.data(), 4);
+              w = ntohs(size_packet[0]);
+              h = ntohs(size_packet[1]);
+            }
+
             sessionCore.width = w;
             sessionCore.height = h;
 
@@ -400,34 +561,56 @@ public:
               continue;
             }
           } else {
+            EncryptedStream &stream = (activeSession_it != m_sessions.end())
+                                          ? activeSession_it->second.core.stream
+                                          : authing_it->second.core.stream;
 
-            char recv_buf[64];
+            bool disconnect = false;
+
+            if (stream.get_mode() == EncryptedStream::Mode::Plaintext) {
+              char recv_buf[64];
 #if defined(_WIN32)
-            // あらかじめ非ブロッキング化しているため、MSG_DONTWAIT不要で0指定
-            int n = recv(fd, recv_buf, sizeof(recv_buf), 0);
+              int n = recv(fd, recv_buf, sizeof(recv_buf), 0);
 #else
-            int n = recv(fd, recv_buf, sizeof(recv_buf), MSG_DONTWAIT);
+              int n = recv(fd, recv_buf, sizeof(recv_buf), MSG_DONTWAIT);
 #endif
-            if (n > 0) {
-              for (int j = 0; j < n; ++j) {
-
-                if (activeSession_it != m_sessions.end()) {
-
-                  auto &session = activeSession_it->second;
-                  session.core.input.pressKey(recv_buf[j]);
+              if (n > 0) {
+                for (int j = 0; j < n; ++j) {
+                  if (activeSession_it != m_sessions.end()) {
+                    activeSession_it->second.core.input.pressKey(recv_buf[j]);
+                  } else {
+                    authing_it->second.core.input.pressKey(recv_buf[j]);
+                  }
+                }
+              } else if (n == 0 || (n < 0 && !IsWouldBlock())) {
+                disconnect = true;
+              }
+            } else {
+              while (true) {
+                std::vector<uint8_t> out_plain;
+                int n = recv_encrypted_frame(fd, stream, out_plain);
+                if (n > 0) {
+                  for (size_t j = 0; j < out_plain.size(); ++j) {
+                    if (activeSession_it != m_sessions.end()) {
+                      activeSession_it->second.core.input.pressKey(out_plain[j]);
+                    } else {
+                      authing_it->second.core.input.pressKey(out_plain[j]);
+                    }
+                  }
+                } else if (n < 0) {
+                  disconnect = true;
+                  break;
                 } else {
-                  authing_it->second.core.input.pressKey(recv_buf[j]);
+                  break;
                 }
               }
-            } else if (n == 0 || (n < 0 && !IsWouldBlock())) {
-              if (activeSession_it != m_sessions.end()) {
+            }
 
-                // エラーまたは正常切断時のクリーンアップ処理
+            if (disconnect) {
+              if (activeSession_it != m_sessions.end()) {
                 activeSession_it->second.context->onDisconnect(m_world);
                 m_sessions.erase(activeSession_it);
-              }
-              // 認証中だった場合は、認証中のマップから消す
-              else {
+              } else {
                 m_authenticatingSessions.erase(authing_it);
               }
 
@@ -461,7 +644,8 @@ public:
           send_engine_frame_compressed(
               authing.core.fd, authing.core.colorBuffer->data(),
               authing.core.colorBuffer->size(), authing.core.width,
-              authing.core.height, authing.core.compressedBuffer);
+              authing.core.height, authing.core.compressedBuffer,
+              authing.core.stream);
 
         authing.core.input.nextFrame();
 
@@ -539,7 +723,8 @@ public:
               send_engine_frame_compressed(
                   session.core.fd, session.core.colorBuffer->data(),
                   session.core.colorBuffer->size(), session.core.width,
-                  session.core.height, session.core.compressedBuffer);
+                  session.core.height, session.core.compressedBuffer,
+                  session.core.stream);
             }
           });
 
