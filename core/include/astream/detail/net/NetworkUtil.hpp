@@ -1,10 +1,11 @@
 #pragma once
-#include "astream/Config.hpp"
 #include <array>
-#include <astream/detail/net/EncryptedStream.hpp>
 #include <cstring>
 #include <vector>
 #include <zlib.h>
+
+#include <astream/Config.hpp>
+#include <astream/detail/net/EncryptedStream.hpp>
 
 // OS固有のネットワーク・システムコールヘッダーの切り替え
 #if defined(_WIN32) || defined(_WIN64)
@@ -84,9 +85,10 @@ inline int send_engine_frame_compressed(int sock, const char *raw_data,
 }
 
 // 0: スキップ, 0 < データ量, 0 > エラー
+template <astream::EngineConfig Config>
 inline int recv_encrypted_frame(int fd, EncryptedStream &stream,
                                 std::vector<uint8_t> &out_plain) {
-  std::array<uint8_t, astream::config::MAX_RECEIVE_FRAME_SIZE> peek_buf;
+  std::array<uint8_t, Config.max_receive_frame_size> peek_buf;
 #if defined(_WIN32)
   int n = recv(fd, (char *)peek_buf.data(), peek_buf.size(), MSG_PEEK);
 #else
@@ -107,7 +109,7 @@ inline int recv_encrypted_frame(int fd, EncryptedStream &stream,
   uint16_t size = (peek_buf[0] << 8) | peek_buf[1];
   size_t frame_size = 2 + size + 16;
 
-  if (frame_size > astream::config::MAX_RECEIVE_FRAME_SIZE) {
+  if (frame_size > Config.max_receive_frame_size) {
     return -1; // 即座に切断
   }
 

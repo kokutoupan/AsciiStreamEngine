@@ -9,9 +9,12 @@
 #include <random>
 #include <system_error>
 #include <thread>
+#include <type_traits>
 #include <unordered_map>
 #include <vector>
 #include <zlib.h>
+
+#include <astream/Config.hpp>
 
 #include <astream/detail/auth/AuthContext.hpp>
 #include <astream/detail/auth/UserStore.hpp>
@@ -68,6 +71,14 @@ BOOL WINAPI ConsoleCtrlHandler(DWORD ctrlType) {
 
 namespace astream {
 
+namespace detail {
+struct EmptyMember {
+  // どんな引数が渡されても、何もせず受け流すconstexprコンストラクタ
+  template <typename... Args>
+  constexpr explicit EmptyMember(Args &&...) noexcept {}
+};
+} // namespace detail
+
 template <typename T>
 concept IsGameWorld =
     requires(T world, int clientId, const InputDevice &input, float dt) {
@@ -109,15 +120,19 @@ concept HasSessionEndFrame =
 // =============================================================================
 // エンジンコアクラス
 // =============================================================================
-template <typename WorldType, typename SessionType>
+template <typename WorldType, typename SessionType,
+          EngineConfig Config = DefaultConfig>
   requires IsGameWorld<WorldType> && IsConnectionSession<SessionType, WorldType>
 class Engine {
+public:
+  static constexpr EngineConfig Setting = Config;
+
 private:
   void banSession(int fd) {
     m_handshakes.erase(fd);
     auto activeSession_it = m_sessions.find(fd);
     if (activeSession_it != m_sessions.end()) {
-      if (m_enableAuth) {
+      if constexpr (Setting.enable_auth) {
         m_userStore.banUser(activeSession_it->second.core.user_name);
       }
       activeSession_it->second.context->onDisconnect(m_world);
@@ -136,12 +151,15 @@ private:
     }
   }
 
-  bool m_enableAuth;
-  astream::auth::UserStore m_userStore;
   int m_port;
   int m_serverSock = -1;
-  bool m_enableEncryption = false;
-  std::unordered_map<int, astream::net::EncryptedStream> m_pendingStreams;
+
+  using UserStoreType = std::conditional_t<Setting.enable_auth, auth::UserStore,
+                                           detail::EmptyMember>;
+
+  [[no_unique_address]] UserStoreType m_userStore;
+
+  std::unordered_map<int, net::EncryptedStream> m_pendingStreams;
 
   struct HandshakeSession {
     int fd;
@@ -149,7 +167,12 @@ private:
     uint8_t client_public_key[32];
     size_t bytes_received = 0;
   };
-  std::unordered_map<int, HandshakeSession> m_handshakes;
+
+  using HandshakeSessionType =
+      std::conditional_t<Setting.enable_encryption,
+                         std::unordered_map<int, HandshakeSession>,
+                         detail::EmptyMember>;
+  HandshakeSessionType m_handshakes;
 
   // 多重化バッファの型をOSネイティブなもので素直に書き分ける
 #if defined(_WIN32)
@@ -189,13 +212,10 @@ private:
   float m_targetFps = 30.0f;
 
 public:
-  Engine(int port = 12345, float targetFps = 30.0f, bool enableAuth = false,
-         astream::auth::RegisterPolicy policy =
-             astream::auth::RegisterPolicy::AdminOnly,
-         bool enableEncryption = false)
-      : m_enableAuth(enableAuth), m_port(port),
-        m_targetFps(targetFps > 0.0f ? targetFps : 30.0f), m_userStore(policy),
-        m_enableEncryption(enableEncryption) {}
+  Engine(int port = 12345, float targetFps = Setting.default_target_fps)
+      : m_port(port),
+        m_targetFps(targetFps > 0.0f ? targetFps : Setting.default_target_fps),
+        m_userStore(Setting.register_policy) {}
   ~Engine() {
     if (m_serverSock >= 0) {
       close(m_serverSock);
@@ -299,7 +319,7 @@ public:
         int client_sock = (int)accept(
             m_serverSock, (struct sockaddr *)&client_addr, &addr_len);
         if (client_sock >= 0) {
-          if (m_enableEncryption) {
+          if constexpr (Setting.enable_encryption) {
             static thread_local std::mt19937 generator(std::random_device{}());
             std::uniform_int_distribution<int> distribution(0, 255);
             HandshakeSession handshake_session;
@@ -345,59 +365,63 @@ public:
         int fd = (int)m_pollFds[i].fd;
         if (m_pollFds[i].revents & POLLIN) {
 
-          auto handshake_it = m_handshakes.find(fd);
-          if (handshake_it != m_handshakes.end()) {
-            HandshakeSession &session = handshake_it->second;
-            uint8_t *buf = session.client_public_key + session.bytes_received;
-            size_t remaining = 32 - session.bytes_received;
+          if constexpr (Setting.enable_encryption) {
+            auto handshake_it = m_handshakes.find(fd);
+            if (handshake_it != m_handshakes.end()) {
+              HandshakeSession &session = handshake_it->second;
+              uint8_t *buf = session.client_public_key + session.bytes_received;
+              size_t remaining = 32 - session.bytes_received;
 #if defined(_WIN32)
-            int n = recv(fd, (char *)buf, (int)remaining, 0);
+              int n = recv(fd, (char *)buf, (int)remaining, 0);
 #else
-            int n = recv(fd, (char *)buf, remaining, MSG_DONTWAIT);
+              int n = recv(fd, (char *)buf, remaining, MSG_DONTWAIT);
 #endif
-            if (n > 0) {
-              session.bytes_received += n;
-              if (session.bytes_received == 32) {
-                uint8_t raw_shared_secret[32];
-                crypto_x25519(raw_shared_secret, session.server_secret_key,
-                              session.client_public_key);
+              if (n > 0) {
+                session.bytes_received += n;
+                if (session.bytes_received == 32) {
+                  uint8_t raw_shared_secret[32];
+                  crypto_x25519(raw_shared_secret, session.server_secret_key,
+                                session.client_public_key);
 
-                uint8_t shared_key[32];
-                uint8_t tx_base_nonce[24];
-                uint8_t rx_base_nonce[24];
+                  uint8_t shared_key[32];
+                  uint8_t tx_base_nonce[24];
+                  uint8_t rx_base_nonce[24];
 
-                crypto_blake2b_keyed(shared_key, 32, raw_shared_secret, 32,
-                                     reinterpret_cast<const uint8_t *>("key"),
-                                     3);
+                  crypto_blake2b_keyed(shared_key, 32, raw_shared_secret, 32,
+                                       reinterpret_cast<const uint8_t *>("key"),
+                                       3);
 
-                uint8_t tx_nonce_buf[32];
-                crypto_blake2b_keyed(
-                    tx_nonce_buf, 32, raw_shared_secret, 32,
-                    reinterpret_cast<const uint8_t *>("server_to_client"), 16);
-                std::memcpy(tx_base_nonce, tx_nonce_buf, 24);
+                  uint8_t tx_nonce_buf[32];
+                  crypto_blake2b_keyed(
+                      tx_nonce_buf, 32, raw_shared_secret, 32,
+                      reinterpret_cast<const uint8_t *>("server_to_client"),
+                      16);
+                  std::memcpy(tx_base_nonce, tx_nonce_buf, 24);
 
-                uint8_t rx_nonce_buf[32];
-                crypto_blake2b_keyed(
-                    rx_nonce_buf, 32, raw_shared_secret, 32,
-                    reinterpret_cast<const uint8_t *>("client_to_server"), 16);
-                std::memcpy(rx_base_nonce, rx_nonce_buf, 24);
+                  uint8_t rx_nonce_buf[32];
+                  crypto_blake2b_keyed(
+                      rx_nonce_buf, 32, raw_shared_secret, 32,
+                      reinterpret_cast<const uint8_t *>("client_to_server"),
+                      16);
+                  std::memcpy(rx_base_nonce, rx_nonce_buf, 24);
 
-                astream::net::EncryptedStream stream;
-                stream.initialize_encryption(
-                    astream::net::EncryptedStream::Mode::Encrypted, shared_key,
-                    tx_base_nonce, rx_base_nonce);
+                  astream::net::EncryptedStream stream;
+                  stream.initialize_encryption(
+                      astream::net::EncryptedStream::Mode::Encrypted,
+                      shared_key, tx_base_nonce, rx_base_nonce);
 
-                m_pendingStreams[fd] = std::move(stream);
+                  m_pendingStreams[fd] = std::move(stream);
+                  m_handshakes.erase(handshake_it);
+                }
+              } else if (n == 0 || (n < 0 && !astream::net::IsWouldBlock())) {
+                close(fd);
                 m_handshakes.erase(handshake_it);
+                m_pollFds[i] = m_pollFds.back();
+                m_pollFds.pop_back();
+                --i;
               }
-            } else if (n == 0 || (n < 0 && !astream::net::IsWouldBlock())) {
-              close(fd);
-              m_handshakes.erase(handshake_it);
-              m_pollFds[i] = m_pollFds.back();
-              m_pollFds.pop_back();
-              --i;
+              continue;
             }
-            continue;
           }
 
           auto activeSession_it = m_sessions.find(fd);
@@ -455,8 +479,8 @@ public:
               h = ntohs(size_packet[1]);
             } else {
               std::vector<uint8_t> out_plain;
-              int len =
-                  astream::net::recv_encrypted_frame(fd, stream, out_plain);
+              int len = astream::net::recv_encrypted_frame<Setting>(fd, stream,
+                                                                    out_plain);
               if (len == 0) {
                 continue;
               }
@@ -493,7 +517,7 @@ public:
                 std::make_unique<astream::graphics::Texture2D<char>>(
                     sessionCore.width, sessionCore.height, ' ');
 
-            if (!m_enableAuth) {
+            if constexpr (!Setting.enable_auth) {
 
               sessionCore.user_name = "Guest_" + std::to_string(fd);
               ActiveSession session;
@@ -545,8 +569,8 @@ public:
             } else {
               while (true) {
                 std::vector<uint8_t> out_plain;
-                int n =
-                    astream::net::recv_encrypted_frame(fd, stream, out_plain);
+                int n = astream::net::recv_encrypted_frame<Setting>(fd, stream,
+                                                                    out_plain);
                 if (n > 0) {
                   for (size_t j = 0; j < out_plain.size(); ++j) {
                     if (activeSession_it != m_sessions.end()) {

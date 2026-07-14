@@ -15,6 +15,7 @@
 
 namespace astream {
 
+using astream::EngineConfig;
 // Expose graphics components to astream namespace
 using graphics::Texture2D;
 using graphics::TextureView;
