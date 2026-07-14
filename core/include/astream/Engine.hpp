@@ -529,9 +529,11 @@ public:
             if (stream.get_mode() == EncryptedStream::Mode::Plaintext) {
               uint16_t size_packet[2];
 #if defined(_WIN32)
-              int len = recv(fd, (char *)size_packet, sizeof(size_packet), MSG_PEEK);
+              int len =
+                  recv(fd, (char *)size_packet, sizeof(size_packet), MSG_PEEK);
 #else
-              int len = recv(fd, (char *)size_packet, sizeof(size_packet), MSG_PEEK | MSG_DONTWAIT);
+              int len = recv(fd, (char *)size_packet, sizeof(size_packet),
+                             MSG_PEEK | MSG_DONTWAIT);
 #endif
               if (len < 0 && IsWouldBlock()) {
                 continue;
@@ -699,6 +701,7 @@ public:
         authing.core.input.nextFrame();
 
         if (result.success) {
+
           ActiveSession session;
           session.context = std::make_unique<SessionType>();
 

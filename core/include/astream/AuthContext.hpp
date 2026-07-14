@@ -5,6 +5,7 @@
 #include <astream/UserStore.hpp>
 #include <astream/util/TextInputLine.hpp>
 #include <string>
+#include <future>
 
 struct AuthResult {
   bool success = false;
@@ -14,7 +15,7 @@ struct AuthResult {
 class AuthContext {
 public:
   bool m_isDirty = true;
-  enum class State { SelectMode, InputUsername, InputPassword };
+  enum class State { SelectMode, InputUsername, InputPassword, Verifying };
 
   AuthContext(UserStore *_userStore) : userStore(_userStore) {}
 
@@ -97,22 +98,32 @@ public:
         m_password = currentInput;
         m_inputLine.clear();
 
-        if (m_isRegisterMode) {
-          bool registerOk = userStore->registerUser(m_username, m_password);
-          if (registerOk) {
+        m_state = State::Verifying;
+        m_isDirty = true;
+
+        m_authFuture = std::async(std::launch::async, [this]() {
+          if (m_isRegisterMode) {
+            return userStore->registerUser(m_username, m_password);
+          } else {
+            return userStore->authenticate(m_username, m_password);
+          }
+        });
+      }
+      break;
+    }
+
+    case State::Verifying: {
+      if (m_authFuture.valid()) {
+        auto status = m_authFuture.wait_for(std::chrono::seconds(0));
+        if (status == std::future_status::ready) {
+          bool success = m_authFuture.get();
+          if (success) {
             result.success = true;
             result.username = m_username;
           } else {
             m_state = State::SelectMode;
           }
-        } else {
-          bool authOk = userStore->authenticate(m_username, m_password);
-          if (authOk) {
-            result.success = true;
-            result.username = m_username;
-          } else {
-            m_state = State::SelectMode;
-          }
+          m_isDirty = true;
         }
       }
       break;
@@ -164,6 +175,15 @@ public:
       drawText(colorBuffer, masked, 12, 5);
       break;
     }
+
+    case State::Verifying: {
+      std::string title =
+          m_isRegisterMode ? "[User Registration]" : "[User Login]";
+      drawText(colorBuffer, title, 2, 2);
+      drawText(colorBuffer, "Username: " + m_username, 2, 4);
+      drawText(colorBuffer, "Verifying... Please wait.", 2, 5);
+      break;
+    }
     }
 
     m_isDirty = false; // 描画完了したのでフラグを落とす
@@ -176,6 +196,7 @@ private:
   bool m_isRegisterMode = false;
   std::string m_username = "";
   std::string m_password = "";
+  std::future<bool> m_authFuture;
 
   astream::util::TextInputLine
       m_inputLine; // チャットでも使っている一行入力バッファ

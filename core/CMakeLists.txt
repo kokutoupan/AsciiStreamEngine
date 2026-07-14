@@ -1,3 +1,5 @@
+option(USE_PROFILER "Enable the loop profiler" OFF)
+
 include(FetchContent)
 FetchContent_Declare(
     argon2_official
@@ -6,7 +8,7 @@ FetchContent_Declare(
 )
 FetchContent_MakeAvailable(argon2_official)
 if(NOT TARGET argon2)
-    add_library(argon2 STATIC
+  add_library(argon2 STATIC
         ${argon2_official_SOURCE_DIR}/src/argon2.c
         ${argon2_official_SOURCE_DIR}/src/core.c
         ${argon2_official_SOURCE_DIR}/src/blake2/blake2b.c
@@ -15,20 +17,27 @@ if(NOT TARGET argon2)
         ${argon2_official_SOURCE_DIR}/src/ref.c # MSVC互換性の高いリファレンス実装を使用
     )
 
-    # 外部(astream_coreなど)からもインクルードできるように PUBLIC でパスを通す
-    target_include_directories(argon2 PUBLIC
+  # 外部(astream_coreなど)からもインクルードできるように PUBLIC でパスを通す
+  target_include_directories(argon2 PUBLIC
         ${argon2_official_SOURCE_DIR}/include
     )
 
-    # MSVC環境固有のC言語セキュア警告を抑制する（必要に応じて）
-    if(MSVC)
-        target_compile_definitions(argon2 PRIVATE _CRT_SECURE_NO_WARNINGS)
-    endif()
+  # MSVC環境固有のC言語セキュア警告を抑制する（必要に応じて）
+  if(MSVC)
+    target_compile_definitions(argon2 PRIVATE _CRT_SECURE_NO_WARNINGS)
+  endif()
 endif()
 
 add_library(astream_core STATIC
   src/dummy.cpp
 )
+
+if(USE_PROFILER)
+  target_compile_definitions(astream_core PUBLIC ENABLE_PROFILER)
+  message(STATUS "Loop Profiler: ENABLED")
+else()
+  message(STATUS "Loop Profiler: DISABLED")
+endif()
 
 if(WIN32)
   target_link_libraries(astream_core

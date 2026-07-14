@@ -4,11 +4,11 @@
 
 #include <fstream>
 #include <iostream>
+#include <mutex>
 #include <print>
 #include <random>
 #include <sstream>
 #include <string>
-#include <string_view>
 #include <unordered_map>
 
 #include <astream/util/StringUtil.hpp>
@@ -40,18 +40,31 @@ public:
       return false;
     }
 
-    auto it = m_users.find(std::string(clean_name));
-    if (it == m_users.end()) {
+    std::string hashed_password;
+    bool user_found = false;
+    bool is_banned = false;
+
+    {
+      std::lock_guard<std::recursive_mutex> lock(m_mutex);
+      auto it = m_users.find(std::string(clean_name));
+      if (it != m_users.end()) {
+        user_found = true;
+        hashed_password = it->second.hashed_password;
+        is_banned = (it->second.status == AccountStatus::Banned);
+      }
+    }
+
+    if (!user_found) {
       // タイミング攻撃対策：存在しない場合もダミーのハッシュ/比較処理を走らせて時間を一定に
       verifyPassword(password, "dummy_hash_for_timing_attack_protection");
       return false;
     }
 
-    if (it->second.status == AccountStatus::Banned) {
+    if (is_banned) {
       return false;
     }
 
-    return verifyPassword(password, it->second.hashed_password);
+    return verifyPassword(password, hashed_password);
   }
 
   // ユーザー登録（成否を返す）
@@ -78,20 +91,31 @@ public:
       return false;
 
     std::string name_str(clean_name);
-    if (m_users.contains(name_str)) {
-      return false; // 既に存在する
+    {
+      std::lock_guard<std::recursive_mutex> lock(m_mutex);
+      if (m_users.contains(name_str)) {
+        return false; // 既に存在する
+      }
     }
 
     // パスワードは内部でハッシュ化して保持（ファイル漏洩対策）
-    m_users[name_str].hashed_password = hashPassword(password);
-    m_users[name_str].status = AccountStatus::Active;
+    std::string hashed = hashPassword(password);
 
-    saveToFile();
+    {
+      std::lock_guard<std::recursive_mutex> lock(m_mutex);
+      if (m_users.contains(name_str)) {
+        return false; // ハッシュ化中に他のスレッドに登録された
+      }
+      m_users[name_str].hashed_password = hashed;
+      m_users[name_str].status = AccountStatus::Active;
+      saveToFile();
+    }
     return true;
   }
 
   bool banUser(std::string_view username) {
     auto clean_name = astream::util::trim(username);
+    std::lock_guard<std::recursive_mutex> lock(m_mutex);
     auto it = m_users.find(std::string(clean_name));
     if (it == m_users.end()) {
       return false; // ユーザーが存在しない
@@ -110,6 +134,7 @@ public:
   };
 
   void loadFromFile() {
+    std::lock_guard<std::recursive_mutex> lock(m_mutex);
     std::ifstream file(m_filePath);
     if (!file.is_open()) {
       // ファイルがない場合は新規作成される想定なのでエラーにはしない
@@ -143,6 +168,7 @@ public:
 
   // テキスト形式でファイルに保存する
   void saveToFile() const {
+    std::lock_guard<std::recursive_mutex> lock(m_mutex);
     std::ofstream file(m_filePath, std::ios::trunc); // 常に上書き
     if (!file.is_open()) {
       std::println(std::cerr, "UserStore Error: Could not open {} for writing.",
@@ -168,9 +194,9 @@ private:
   RegisterPolicy m_policy;
 
   std::string m_filePath;
+  mutable std::recursive_mutex m_mutex;
 
   // パスワードハッシュ化
-  // TODO: そのうち非同期にするかも
   std::string hashPassword(std::string_view password) const {
     // 1. OSの乱数生成器でセキュアなソルト（16バイト）を生成
     uint8_t salt[16];

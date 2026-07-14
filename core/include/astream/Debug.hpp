@@ -8,7 +8,7 @@
 namespace Debug {
 
 class LoopProfiler {
-#ifndef NDEBUG
+#ifdef ENABLE_PROFILER
 private:
   std::string_view m_name;
   std::chrono::steady_clock::time_point m_start;
