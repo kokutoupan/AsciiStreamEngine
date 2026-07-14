@@ -521,32 +521,43 @@ public:
               --i;
               continue;
             }
-            sessionCore.stream = std::move(it_stream->second);
-            m_pendingStreams.erase(it_stream);
+            EncryptedStream &stream = it_stream->second;
 
             int w = 0;
             int h = 0;
 
-            if (sessionCore.stream.get_mode() ==
-                EncryptedStream::Mode::Plaintext) {
-              uint16_t size_packet[2] = {0, 0};
-              int len = recv(fd, (char *)size_packet, sizeof(size_packet), 0);
-              if (len <= 0) {
-                close(fd);
-                m_pollFds[i] = m_pollFds.back();
-                m_pollFds.pop_back();
-                --i;
+            if (stream.get_mode() == EncryptedStream::Mode::Plaintext) {
+              uint16_t size_packet[2];
+#if defined(_WIN32)
+              int len = recv(fd, (char *)size_packet, sizeof(size_packet), MSG_PEEK);
+#else
+              int len = recv(fd, (char *)size_packet, sizeof(size_packet), MSG_PEEK | MSG_DONTWAIT);
+#endif
+              if (len < 0 && IsWouldBlock()) {
                 continue;
               }
+              if (len < (int)sizeof(size_packet)) {
+                if (len == 0 || (len < 0 && !IsWouldBlock())) {
+                  close(fd);
+                  m_pendingStreams.erase(it_stream);
+                  m_pollFds[i] = m_pollFds.back();
+                  m_pollFds.pop_back();
+                  --i;
+                }
+                continue;
+              }
+              recv(fd, (char *)size_packet, sizeof(size_packet), 0);
               w = ntohs(size_packet[0]);
               h = ntohs(size_packet[1]);
             } else {
               std::vector<uint8_t> out_plain;
-              int len = recv_encrypted_frame(fd, sessionCore.stream, out_plain);
-              // TODO:
-              // recv_encrypted_frameの都合上次のフレームに回したいがそれはめんどくさい
-              if (len <= 0 || out_plain.size() < 4) {
+              int len = recv_encrypted_frame(fd, stream, out_plain);
+              if (len == 0) {
+                continue;
+              }
+              if (len < 0 || out_plain.size() < 4) {
                 close(fd);
+                m_pendingStreams.erase(it_stream);
                 m_pollFds[i] = m_pollFds.back();
                 m_pollFds.pop_back();
                 --i;
@@ -557,6 +568,9 @@ public:
               w = ntohs(size_packet[0]);
               h = ntohs(size_packet[1]);
             }
+
+            sessionCore.stream = std::move(stream);
+            m_pendingStreams.erase(it_stream);
 
             sessionCore.width = w;
             sessionCore.height = h;
