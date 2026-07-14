@@ -1,5 +1,5 @@
 #pragma once
-#include "astream/Config.hpp"
+
 #include <algorithm>
 #include <chrono>
 #include <execution>
@@ -14,8 +14,9 @@
 #include <zlib.h>
 
 #include <astream/AuthContext.hpp>
-#include <astream/EncryptedStream.hpp>
 #include <astream/UserStore.hpp>
+#include <astream/net/EncryptedStream.hpp>
+#include <astream/net/NetworkUtil.hpp>
 
 // =============================================================================
 // OS固有のネットワーク・システムコールヘッダーの切り替え
@@ -104,110 +105,6 @@ concept HasSessionEndFrame =
     requires(T &t, int id, World &w) { t.endFrame(id, w); };
 
 // =============================================================================
-// zlibによる圧縮送信ヘルパー (引数の型キャストをOSに合わせて調整)
-// =============================================================================
-inline int send_engine_frame_compressed(int sock, const char *raw_data,
-                                        size_t raw_len, uint8_t width,
-                                        uint8_t height,
-                                        std::vector<uint8_t> &comp_buf,
-                                        EncryptedStream &stream) {
-  // 1. 必要十分な圧縮バッファを確保（初回やサイズ変更時のみ resize が走る）
-  uLongf max_comp_len = compressBound(raw_len);
-  if (comp_buf.size() != max_comp_len) {
-    comp_buf.resize(max_comp_len);
-  }
-
-  // 2. raw_data から直接圧縮
-  uLongf comp_len = max_comp_len;
-  int res =
-      compress(comp_buf.data(), &comp_len, (const Bytef *)raw_data, raw_len);
-  if (res != Z_OK)
-    return -1;
-
-  if (stream.get_mode() == EncryptedStream::Mode::Plaintext) {
-    // 3. サイズ（4バイト）を送信
-    uint32_t net_len = htonl((uint32_t)comp_len);
-    if (send(sock, (const char *)&net_len, sizeof(net_len), 0) <= 0)
-      return -1;
-
-    // 4. width と height（計2バイト）を直接送信
-    uint8_t meta[2] = {width, height};
-    if (send(sock, (const char *)meta, sizeof(meta), 0) <= 0)
-      return -1;
-
-    // 5. 圧縮データを送信
-    return send(sock, (const char *)comp_buf.data(), (int)comp_len, 0);
-  } else {
-    // Encrypted mode: construct payload [4 bytes net_len] [1 byte width] [1
-    // byte height] [comp_len bytes compressed data]
-    std::vector<uint8_t> payload(6 + comp_len);
-    uint32_t net_len = htonl((uint32_t)comp_len);
-    std::memcpy(payload.data(), &net_len, 4);
-    payload[4] = width;
-    payload[5] = height;
-    std::memcpy(payload.data() + 6, comp_buf.data(), comp_len);
-
-    std::vector<uint8_t> wrapped =
-        stream.wrap_outgoing(payload.data(), payload.size());
-    return send(sock, (const char *)wrapped.data(), (int)wrapped.size(), 0);
-  }
-}
-
-// エラーが「データがまだ届いてないだけ（正常）」かどうかを判定するヘルパー
-inline bool IsWouldBlock() {
-#if defined(_WIN32)
-  return WSAGetLastError() == WSAEWOULDBLOCK;
-#else
-  return errno == EAGAIN || errno == EWOULDBLOCK;
-#endif
-}
-
-// 0: スキップ, 0 < データ量, 0 > エラー
-inline int recv_encrypted_frame(int fd, EncryptedStream &stream,
-                                std::vector<uint8_t> &out_plain) {
-  std::array<uint8_t, astream::config::MAX_RECEIVE_FRAME_SIZE> peek_buf;
-#if defined(_WIN32)
-  int n = recv(fd, (char *)peek_buf.data(), peek_buf.size(), MSG_PEEK);
-#else
-  int n = recv(fd, (char *)peek_buf.data(), peek_buf.size(),
-               MSG_PEEK | MSG_DONTWAIT);
-#endif
-
-  if (n == 0) {
-    return -1;
-  }
-  if (n < 2) {
-    if (IsWouldBlock()) {
-      return 0; // ★重要: 単に「今データがないだけ」なら 0 を返す
-    }
-    return -1; // 本物のエラーは切断扱いにする
-  }
-
-  uint16_t size = (peek_buf[0] << 8) | peek_buf[1];
-  size_t frame_size = 2 + size + 16;
-
-  if (frame_size > astream::config::MAX_RECEIVE_FRAME_SIZE) {
-    return -1; // 即座に切断
-  }
-
-  if (n < (int)frame_size) {
-    return 0; // まだ足りないので、1バイトも消費せず次のポーリングに完全丸投げ
-  }
-
-  std::vector<uint8_t> frame(frame_size);
-  int read_bytes = recv(fd, (char *)frame.data(), frame_size, 0);
-  if (read_bytes != (int)frame_size) {
-    return -1; // 基本的には通らないはずだが、万が一のソケットエラー用
-  }
-
-  if (!stream.unwrap_incoming(frame, out_plain)) {
-    return -1; // 改ざん、またはカウンターズレ（リプレイ攻撃）を検知して切断
-  }
-
-  return (int)out_plain.size();
-}
-
-// =============================================================================
 // エンジンコアクラス
 // =============================================================================
 template <typename WorldType, typename SessionType>
@@ -242,7 +139,7 @@ private:
   int m_port;
   int m_serverSock = -1;
   bool m_enableEncryption = false;
-  std::unordered_map<int, EncryptedStream> m_pendingStreams;
+  std::unordered_map<int, astream::net::EncryptedStream> m_pendingStreams;
 
   struct HandshakeSession {
     int fd;
@@ -269,7 +166,7 @@ private:
     std::string user_name;
     std::unique_ptr<Texture2D<char>> colorBuffer;
     std::vector<uint8_t> compressedBuffer;
-    EncryptedStream stream;
+    astream::net::EncryptedStream stream;
   };
 
   // 認証中のセッション
@@ -422,9 +319,10 @@ public:
             uint8_t mode_byte = 0; // Plaintext
             send(client_sock, (const char *)&mode_byte, 1, 0);
             uint8_t dummy[32] = {0};
-            EncryptedStream stream;
-            stream.initialize_encryption(EncryptedStream::Mode::Plaintext,
-                                         dummy, dummy, dummy);
+            astream::net::EncryptedStream stream;
+            stream.initialize_encryption(
+                astream::net::EncryptedStream::Mode::Plaintext, dummy, dummy,
+                dummy);
             m_pendingStreams[client_sock] = std::move(stream);
           }
 
@@ -481,15 +379,15 @@ public:
                     reinterpret_cast<const uint8_t *>("client_to_server"), 16);
                 std::memcpy(rx_base_nonce, rx_nonce_buf, 24);
 
-                EncryptedStream stream;
-                stream.initialize_encryption(EncryptedStream::Mode::Encrypted,
-                                             shared_key, tx_base_nonce,
-                                             rx_base_nonce);
+                astream::net::EncryptedStream stream;
+                stream.initialize_encryption(
+                    astream::net::EncryptedStream::Mode::Encrypted, shared_key,
+                    tx_base_nonce, rx_base_nonce);
 
                 m_pendingStreams[fd] = std::move(stream);
                 m_handshakes.erase(handshake_it);
               }
-            } else if (n == 0 || (n < 0 && !IsWouldBlock())) {
+            } else if (n == 0 || (n < 0 && !astream::net::IsWouldBlock())) {
               close(fd);
               m_handshakes.erase(handshake_it);
               m_pollFds[i] = m_pollFds.back();
@@ -521,12 +419,13 @@ public:
               --i;
               continue;
             }
-            EncryptedStream &stream = it_stream->second;
+            astream::net::EncryptedStream &stream = it_stream->second;
 
             int w = 0;
             int h = 0;
 
-            if (stream.get_mode() == EncryptedStream::Mode::Plaintext) {
+            if (stream.get_mode() ==
+                astream::net::EncryptedStream::Mode::Plaintext) {
               uint16_t size_packet[2];
 #if defined(_WIN32)
               int len =
@@ -535,11 +434,11 @@ public:
               int len = recv(fd, (char *)size_packet, sizeof(size_packet),
                              MSG_PEEK | MSG_DONTWAIT);
 #endif
-              if (len < 0 && IsWouldBlock()) {
+              if (len < 0 && astream::net::IsWouldBlock()) {
                 continue;
               }
               if (len < (int)sizeof(size_packet)) {
-                if (len == 0 || (len < 0 && !IsWouldBlock())) {
+                if (len == 0 || (len < 0 && !astream::net::IsWouldBlock())) {
                   close(fd);
                   m_pendingStreams.erase(it_stream);
                   m_pollFds[i] = m_pollFds.back();
@@ -553,7 +452,8 @@ public:
               h = ntohs(size_packet[1]);
             } else {
               std::vector<uint8_t> out_plain;
-              int len = recv_encrypted_frame(fd, stream, out_plain);
+              int len =
+                  astream::net::recv_encrypted_frame(fd, stream, out_plain);
               if (len == 0) {
                 continue;
               }
@@ -611,13 +511,15 @@ public:
               continue;
             }
           } else {
-            EncryptedStream &stream = (activeSession_it != m_sessions.end())
-                                          ? activeSession_it->second.core.stream
-                                          : authing_it->second.core.stream;
+            astream::net::EncryptedStream &stream =
+                (activeSession_it != m_sessions.end())
+                    ? activeSession_it->second.core.stream
+                    : authing_it->second.core.stream;
 
             bool disconnect = false;
 
-            if (stream.get_mode() == EncryptedStream::Mode::Plaintext) {
+            if (stream.get_mode() ==
+                astream::net::EncryptedStream::Mode::Plaintext) {
               char recv_buf[64];
 #if defined(_WIN32)
               int n = recv(fd, recv_buf, sizeof(recv_buf), 0);
@@ -632,13 +534,14 @@ public:
                     authing_it->second.core.input.pressKey(recv_buf[j]);
                   }
                 }
-              } else if (n == 0 || (n < 0 && !IsWouldBlock())) {
+              } else if (n == 0 || (n < 0 && !astream::net::IsWouldBlock())) {
                 disconnect = true;
               }
             } else {
               while (true) {
                 std::vector<uint8_t> out_plain;
-                int n = recv_encrypted_frame(fd, stream, out_plain);
+                int n =
+                    astream::net::recv_encrypted_frame(fd, stream, out_plain);
                 if (n > 0) {
                   for (size_t j = 0; j < out_plain.size(); ++j) {
                     if (activeSession_it != m_sessions.end()) {
@@ -692,7 +595,7 @@ public:
             authing.authContext->render(authing.core.colorBuffer->view());
 
         if (isDirty)
-          send_engine_frame_compressed(
+          astream::net::send_engine_frame_compressed(
               authing.core.fd, authing.core.colorBuffer->data(),
               authing.core.colorBuffer->size(), authing.core.width,
               authing.core.height, authing.core.compressedBuffer,
@@ -772,7 +675,7 @@ public:
                       // [B]
                       // 圧縮と送信（スレッドごとに個別に実行されるため、重いcompressが並列化される）
                       if (should_send) {
-                        send_engine_frame_compressed(
+                        astream::net::send_engine_frame_compressed(
                             session.core.fd, session.core.colorBuffer->data(),
                             session.core.colorBuffer->size(),
                             session.core.width, session.core.height,

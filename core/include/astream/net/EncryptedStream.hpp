@@ -1,8 +1,11 @@
+#pragma once
 #include <cstdint>
 #include <cstring>
 #include <vector>
 
 #include <monocypher.h>
+
+namespace astream::net {
 
 class EncryptedStream {
 public:
@@ -106,3 +109,5 @@ private:
   uint64_t tx_counter;
   uint64_t rx_counter;
 };
+
+} // namespace astream::net
