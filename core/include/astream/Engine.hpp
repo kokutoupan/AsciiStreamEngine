@@ -13,10 +13,10 @@
 #include <vector>
 #include <zlib.h>
 
-#include <astream/auth/AuthContext.hpp>
-#include <astream/auth/UserStore.hpp>
-#include <astream/net/EncryptedStream.hpp>
-#include <astream/net/NetworkUtil.hpp>
+#include <astream/detail/auth/AuthContext.hpp>
+#include <astream/detail/auth/UserStore.hpp>
+#include <astream/detail/net/EncryptedStream.hpp>
+#include <astream/detail/net/NetworkUtil.hpp>
 
 // =============================================================================
 // OS固有のネットワーク・システムコールヘッダーの切り替え
@@ -66,6 +66,8 @@ BOOL WINAPI ConsoleCtrlHandler(DWORD ctrlType) {
 #include <astream/InputDevice.hpp>
 #include <astream/graphics/Texture2D.hpp>
 
+namespace astream {
+
 template <typename T>
 concept IsGameWorld =
     requires(T world, int clientId, const InputDevice &input, float dt) {
@@ -89,7 +91,7 @@ concept IsConnectionSession =
     requires(Session s, int clientId, int w, int h,
              const std::string &user_name, World &world,
              const World &const_world, const InputDevice &input,
-             TextureView<char> buf) {
+             astream::graphics::TextureView<char> buf) {
       { s.init(clientId, w, h, user_name, world) } -> std::same_as<void>;
       { s.onDisconnect(world) } -> std::same_as<void>;
       { s.update(clientId, input, world) } -> std::same_as<void>;
@@ -164,7 +166,7 @@ private:
     int height = 24;
     InputDevice input;
     std::string user_name;
-    std::unique_ptr<Texture2D<char>> colorBuffer;
+    std::unique_ptr<astream::graphics::Texture2D<char>> colorBuffer;
     std::vector<uint8_t> compressedBuffer;
     astream::net::EncryptedStream stream;
   };
@@ -487,8 +489,9 @@ public:
             else if (h > 254)
               sessionCore.height = 254;
 
-            sessionCore.colorBuffer = std::make_unique<Texture2D<char>>(
-                sessionCore.width, sessionCore.height, ' ');
+            sessionCore.colorBuffer =
+                std::make_unique<astream::graphics::Texture2D<char>>(
+                    sessionCore.width, sessionCore.height, ' ');
 
             if (!m_enableAuth) {
 
@@ -719,3 +722,5 @@ public:
     return false;
   }
 };
+
+} // namespace astream

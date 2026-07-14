@@ -414,9 +414,3 @@ public:
 };
 
 } // namespace astream::graphics
-
-using astream::graphics::GraphicsDevice;
-using astream::graphics::IsComputeShader;
-using astream::graphics::IsFragmentShader;
-using astream::graphics::IsVarying;
-using astream::graphics::IsVertexShader;

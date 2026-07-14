@@ -6,6 +6,10 @@
 
 #include <astream/graphics/Texture2D.hpp>
 
+using astream::graphics::convertible_to_texture_view;
+using astream::graphics::Texture2D;
+using astream::graphics::TextureView;
+
 namespace TextureUtil {
 
 /**

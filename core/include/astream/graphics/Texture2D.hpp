@@ -193,7 +193,3 @@ public:
 };
 
 } // namespace astream::graphics
-
-using astream::graphics::convertible_to_texture_view;
-using astream::graphics::Texture2D;
-using astream::graphics::TextureView;

@@ -21,7 +21,3 @@ struct Transform {
 };
 
 } // namespace astream::graphics
-
-namespace astream {
-using graphics::Transform;
-} // namespace astream

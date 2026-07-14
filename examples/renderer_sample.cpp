@@ -7,9 +7,8 @@
 #include <thread>
 #include <vector>
 
-#include <astream/graphics/GraphicsDevice.hpp>
-#include <astream/graphics/Texture2D.hpp>
-#include <astream/graphics/shaders/DefaultShaders.hpp>
+#include <astream/astream.hpp>
+using namespace astream;
 #include <glm/glm.hpp>
 #include <glm/gtc/matrix_transform.hpp>
 

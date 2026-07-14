@@ -10,13 +10,7 @@
 #include <unordered_map>
 #include <vector>
 
-#include <astream/ConnectionContext.hpp>
-#include <astream/GameWorld.hpp>
-#include <astream/graphics/GraphicsDevice.hpp>
-#include <astream/graphics/MeshView.hpp>
-#include <astream/graphics/Texture2D.hpp>
-#include <astream/graphics/Transform.hpp>
-#include <astream/graphics/shaders/DefaultShaders.hpp>
+#include <astream/astream.hpp>
 
 #include <astream/util/MeshUtil.hpp>
 #include <astream/util/TextureUtil.hpp>
@@ -46,6 +40,12 @@
 
 using astream::MeshView;
 using astream::Transform;
+using astream::Texture2D;
+using astream::TextureView;
+using astream::GraphicsDevice;
+namespace Shaders {
+using namespace astream::Shaders;
+}
 
 #include "EcsPhysics.hpp"
 
@@ -407,7 +407,8 @@ public:
     planeIndices = {0, 2, 1, 0, 3, 2};
   }
 
-  void init(int clientId, int width, int height, const std::string &user_name, EcsGameWorld &world) override {
+  void init(int clientId, int width, int height, const std::string &user_name,
+            EcsGameWorld &world) override {
     m_lastFrameTime = std::chrono::steady_clock::now();
 
     m_clientId = clientId;

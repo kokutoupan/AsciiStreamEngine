@@ -15,7 +15,3 @@ struct MeshView {
 };
 
 } // namespace astream::graphics
-
-namespace astream {
-using graphics::MeshView;
-} // namespace astream

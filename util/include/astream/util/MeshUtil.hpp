@@ -5,6 +5,10 @@
 #include <glm/glm.hpp>
 #include <vector>
 
+namespace Shaders {
+using astream::graphics::shaders::DefaultVertex;
+}
+
 namespace MeshUtil {
 
 /**

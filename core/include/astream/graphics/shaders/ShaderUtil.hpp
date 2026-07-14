@@ -24,7 +24,3 @@ inline char mapIntensityToChar(float intensity) {
 }
 
 } // namespace astream::graphics::shaders
-
-namespace Shaders {
-using astream::graphics::shaders::mapIntensityToChar;
-} // namespace Shaders

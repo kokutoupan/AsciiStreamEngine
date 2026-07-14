@@ -1,7 +1,7 @@
 #pragma once
 #include <algorithm>
 #include <astream/InputDevice.hpp>
-#include <astream/auth/UserStore.hpp>
+#include <astream/detail/auth/UserStore.hpp>
 #include <astream/graphics/GraphicsDevice.hpp>
 #include <astream/util/StringUtil.hpp>
 #include <astream/util/TextInputLine.hpp>
@@ -147,7 +147,7 @@ public:
     return result;
   }
 
-  bool render(TextureView<char> colorBuffer) {
+  bool render(astream::graphics::TextureView<char> colorBuffer) {
     // 変更がないなら、クリアも描画も一切スキップ
     if (!m_isDirty) {
       return false;

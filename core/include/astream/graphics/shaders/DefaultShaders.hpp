@@ -104,11 +104,3 @@ inline void deferredLightingCS(int x, int y, TextureView<char> colorBuf,
 }
 
 } // namespace astream::graphics::shaders
-
-namespace Shaders {
-using astream::graphics::shaders::DefaultVarying;
-using astream::graphics::shaders::DefaultVertex;
-using astream::graphics::shaders::deferredLightingCS;
-using astream::graphics::shaders::geometryVS;
-using astream::graphics::shaders::shadowVS;
-} // namespace Shaders

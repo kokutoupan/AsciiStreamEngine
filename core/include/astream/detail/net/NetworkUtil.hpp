@@ -1,7 +1,7 @@
 #pragma once
 #include "astream/Config.hpp"
 #include <array>
-#include <astream/net/EncryptedStream.hpp>
+#include <astream/detail/net/EncryptedStream.hpp>
 #include <cstring>
 #include <vector>
 #include <zlib.h>
