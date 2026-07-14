@@ -1,15 +1,20 @@
 #include "NetworkStreamClient.hpp"
 
-#include <astream/EncryptedStream.hpp>
 #include <cstring>
 #include <iostream>
 #include <print>
 #include <vector>
 #include <random>
+#include <algorithm>
+
+
 #include <monocypher.h>
+
+#include <astream/EncryptedStream.hpp>
 
 // OS依存ヘッダー
 #if defined(_WIN32) || defined(_WIN64)
+#define NOMINMAX
 #include <winsock2.h>
 #include <ws2tcpip.h>
 #else
