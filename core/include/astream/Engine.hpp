@@ -162,25 +162,6 @@ inline bool IsWouldBlock() {
 #endif
 }
 
-inline int recv_exact(int fd, void *buf, size_t len) {
-  size_t recvd = 0;
-  char *p = (char *)buf;
-  while (recvd < len) {
-    int n = recv(fd, p + recvd, len - recvd, 0);
-    if (n == 0)
-      return 0; // closed
-    if (n < 0) {
-      if (IsWouldBlock()) {
-        std::this_thread::sleep_for(std::chrono::milliseconds(1));
-        continue;
-      }
-      return -1; // error
-    }
-    recvd += n;
-  }
-  return (int)recvd;
-}
-
 // 0: スキップ, 0 < データ量, 0 > エラー
 inline int recv_encrypted_frame(int fd, EncryptedStream &stream,
                                 std::vector<uint8_t> &out_plain) {
@@ -234,6 +215,7 @@ template <typename WorldType, typename SessionType>
 class Engine {
 private:
   void banSession(int fd) {
+    m_handshakes.erase(fd);
     auto activeSession_it = m_sessions.find(fd);
     if (activeSession_it != m_sessions.end()) {
       if (m_enableAuth) {
@@ -261,6 +243,14 @@ private:
   int m_serverSock = -1;
   bool m_enableEncryption = false;
   std::unordered_map<int, EncryptedStream> m_pendingStreams;
+
+  struct HandshakeSession {
+    int fd;
+    uint8_t server_secret_key[32];
+    uint8_t client_public_key[32];
+    size_t bytes_received = 0;
+  };
+  std::unordered_map<int, HandshakeSession> m_handshakes;
 
   // 多重化バッファの型をOSネイティブなもので素直に書き分ける
 #if defined(_WIN32)
@@ -409,63 +399,34 @@ public:
         int client_sock = (int)accept(
             m_serverSock, (struct sockaddr *)&client_addr, &addr_len);
         if (client_sock >= 0) {
-          EncryptedStream stream;
           if (m_enableEncryption) {
             static thread_local std::mt19937 generator(std::random_device{}());
             std::uniform_int_distribution<int> distribution(0, 255);
-            uint8_t server_secret_key[32];
-            for (auto &b : server_secret_key)
+            HandshakeSession handshake_session;
+            handshake_session.fd = client_sock;
+            for (auto &b : handshake_session.server_secret_key)
               b = static_cast<uint8_t>(distribution(generator));
 
             uint8_t server_public_key[32];
-            crypto_x25519_public_key(server_public_key, server_secret_key);
+            crypto_x25519_public_key(server_public_key,
+                                     handshake_session.server_secret_key);
 
             uint8_t handshake[33];
             handshake[0] = 1; // Encrypted mode
             std::memcpy(handshake + 1, server_public_key, 32);
             send(client_sock, (const char *)handshake, 33, 0);
 
-            uint8_t client_public_key[32];
-            if (recv_exact(client_sock, client_public_key, 32) != 32) {
-              close(client_sock);
-              continue;
-            }
-
-            uint8_t raw_shared_secret[32];
-            crypto_x25519(raw_shared_secret, server_secret_key,
-                          client_public_key);
-
-            uint8_t shared_key[32];
-            uint8_t tx_base_nonce[24];
-            uint8_t rx_base_nonce[24];
-
-            crypto_blake2b_keyed(shared_key, 32, raw_shared_secret, 32,
-                                 reinterpret_cast<const uint8_t *>("key"), 3);
-
-            uint8_t tx_nonce_buf[32];
-            crypto_blake2b_keyed(
-                tx_nonce_buf, 32, raw_shared_secret, 32,
-                reinterpret_cast<const uint8_t *>("server_to_client"), 16);
-            std::memcpy(tx_base_nonce, tx_nonce_buf, 24);
-
-            uint8_t rx_nonce_buf[32];
-            crypto_blake2b_keyed(
-                rx_nonce_buf, 32, raw_shared_secret, 32,
-                reinterpret_cast<const uint8_t *>("client_to_server"), 16);
-            std::memcpy(rx_base_nonce, rx_nonce_buf, 24);
-
-            stream.initialize_encryption(EncryptedStream::Mode::Encrypted,
-                                         shared_key, tx_base_nonce,
-                                         rx_base_nonce);
+            handshake_session.bytes_received = 0;
+            m_handshakes[client_sock] = std::move(handshake_session);
           } else {
             uint8_t mode_byte = 0; // Plaintext
             send(client_sock, (const char *)&mode_byte, 1, 0);
             uint8_t dummy[32] = {0};
+            EncryptedStream stream;
             stream.initialize_encryption(EncryptedStream::Mode::Plaintext,
                                          dummy, dummy, dummy);
+            m_pendingStreams[client_sock] = std::move(stream);
           }
-
-          m_pendingStreams[client_sock] = std::move(stream);
 
 #if defined(_WIN32)
           // Windows固有：MSG_DONTWAITの代わりに対象ソケットを非ブロッキングモードに切り替える
@@ -482,6 +443,61 @@ public:
       for (size_t i = 1; i < m_pollFds.size(); ++i) {
         int fd = (int)m_pollFds[i].fd;
         if (m_pollFds[i].revents & POLLIN) {
+
+          auto handshake_it = m_handshakes.find(fd);
+          if (handshake_it != m_handshakes.end()) {
+            HandshakeSession &session = handshake_it->second;
+            uint8_t *buf = session.client_public_key + session.bytes_received;
+            size_t remaining = 32 - session.bytes_received;
+#if defined(_WIN32)
+            int n = recv(fd, (char *)buf, (int)remaining, 0);
+#else
+            int n = recv(fd, (char *)buf, remaining, MSG_DONTWAIT);
+#endif
+            if (n > 0) {
+              session.bytes_received += n;
+              if (session.bytes_received == 32) {
+                uint8_t raw_shared_secret[32];
+                crypto_x25519(raw_shared_secret, session.server_secret_key,
+                              session.client_public_key);
+
+                uint8_t shared_key[32];
+                uint8_t tx_base_nonce[24];
+                uint8_t rx_base_nonce[24];
+
+                crypto_blake2b_keyed(shared_key, 32, raw_shared_secret, 32,
+                                     reinterpret_cast<const uint8_t *>("key"),
+                                     3);
+
+                uint8_t tx_nonce_buf[32];
+                crypto_blake2b_keyed(
+                    tx_nonce_buf, 32, raw_shared_secret, 32,
+                    reinterpret_cast<const uint8_t *>("server_to_client"), 16);
+                std::memcpy(tx_base_nonce, tx_nonce_buf, 24);
+
+                uint8_t rx_nonce_buf[32];
+                crypto_blake2b_keyed(
+                    rx_nonce_buf, 32, raw_shared_secret, 32,
+                    reinterpret_cast<const uint8_t *>("client_to_server"), 16);
+                std::memcpy(rx_base_nonce, rx_nonce_buf, 24);
+
+                EncryptedStream stream;
+                stream.initialize_encryption(EncryptedStream::Mode::Encrypted,
+                                             shared_key, tx_base_nonce,
+                                             rx_base_nonce);
+
+                m_pendingStreams[fd] = std::move(stream);
+                m_handshakes.erase(handshake_it);
+              }
+            } else if (n == 0 || (n < 0 && !IsWouldBlock())) {
+              close(fd);
+              m_handshakes.erase(handshake_it);
+              m_pollFds[i] = m_pollFds.back();
+              m_pollFds.pop_back();
+              --i;
+            }
+            continue;
+          }
 
           auto activeSession_it = m_sessions.find(fd);
 
