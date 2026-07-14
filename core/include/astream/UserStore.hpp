@@ -86,8 +86,7 @@ public:
     if (clean_name.contains(':') || clean_name.contains('\n') ||
         clean_name.contains('\r'))
       return false;
-    if (password.contains(':') || password.contains('\n') ||
-        password.contains('\r'))
+    if (password.contains('\n') || password.contains('\r'))
       return false;
 
     std::string name_str(clean_name);

@@ -112,6 +112,25 @@ inline bool drawText(TextureView<char> view, int startX, int startY,
   return cy < texH;
 }
 
+/**
+ * @brief 境界枠（ボックス）を既存のテクスチャに描画する
+ * @param view 描画対象のテクスチャ参照
+ * @param x 開始X座標
+ * @param y 開始Y座標
+ * @param w 幅
+ * @param h 高さ
+ */
+inline void drawBox(TextureView<char> view, int x, int y, int w, int h) {
+  if (w <= 2 || h <= 2)
+    return;
+  drawText(view, x, y, "+" + std::string(w - 2, '-') + "+");
+  drawText(view, x, y + h - 1, "+" + std::string(w - 2, '-') + "+");
+  for (int row = y + 1; row < y + h - 1; ++row) {
+    drawText(view, x, row, "|");
+    drawText(view, x + w - 1, row, "|");
+  }
+}
+
 namespace detail {
 template <typename T>
 void blit_texture_impl(TextureView<T> dst, TextureView<const T> src, int posX,

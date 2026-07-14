@@ -1,11 +1,13 @@
 #pragma once
 #include "astream/util/StringUtil.hpp"
+#include <algorithm>
 #include <astream/GraphicsDevice.hpp>
 #include <astream/InputDevice.hpp>
 #include <astream/UserStore.hpp>
 #include <astream/util/TextInputLine.hpp>
-#include <string>
+#include <astream/util/TextureUtil.hpp>
 #include <future>
+#include <string>
 
 struct AuthResult {
   bool success = false;
@@ -20,7 +22,8 @@ public:
   AuthContext(UserStore *_userStore) : userStore(_userStore) {}
 
   std::string getMenuText() const {
-    if (userStore && userStore->getRegisterPolicy() == RegisterPolicy::AllowAll) {
+    if (userStore &&
+        userStore->getRegisterPolicy() == RegisterPolicy::AllowAll) {
       return "=================================\n"
              "    AsciiStreamEngine Login\n"
              "=================================\n"
@@ -59,7 +62,8 @@ public:
           m_isRegisterMode = false;
           m_state = State::InputUsername;
           m_inputLine.clear();
-        } else if (currentInput == "2" && userStore && userStore->getRegisterPolicy() == RegisterPolicy::AllowAll) {
+        } else if (currentInput == "2" && userStore &&
+                   userStore->getRegisterPolicy() == RegisterPolicy::AllowAll) {
           m_isRegisterMode = true;
           m_state = State::InputUsername;
           m_inputLine.clear();
@@ -99,6 +103,7 @@ public:
         m_inputLine.clear();
 
         m_state = State::Verifying;
+        m_animFrame = 0;
         m_isDirty = true;
 
         m_authFuture = std::async(std::launch::async, [this]() {
@@ -113,6 +118,8 @@ public:
     }
 
     case State::Verifying: {
+      m_animFrame++;
+      m_isDirty = true;
       if (m_authFuture.valid()) {
         auto status = m_authFuture.wait_for(std::chrono::seconds(0));
         if (status == std::future_status::ready) {
@@ -147,41 +154,126 @@ public:
     // 1. 画面のクリア
     colorBuffer.clear(' ');
 
+    int viewW = colorBuffer.width();
+    int viewH = colorBuffer.height();
+    int boxW = 44;
+    int boxH = 11;
+    int startX = std::max(0, (viewW - boxW) / 2);
+    int startY = std::max(0, (viewH - boxH) / 2);
+
     // 2. 現在の状態の見た目をバッファに描き込む
     switch (m_state) {
     case State::SelectMode: {
-      drawText(colorBuffer, getMenuText(), 2, 2);
-      drawText(colorBuffer, m_inputLine.str(), 21, 8);
+      TextureUtil::drawBox(colorBuffer, startX, startY, boxW, boxH);
+
+      std::string title = "AsciiStreamEngine Login";
+      int titleX = startX + (boxW - (int)title.length()) / 2;
+      TextureUtil::drawText(colorBuffer, titleX, startY + 1, title);
+      TextureUtil::drawText(colorBuffer, startX, startY + 2,
+                            "+" + std::string(boxW - 2, '-') + "+");
+
+      TextureUtil::drawText(colorBuffer, startX + 4, startY + 4, "1. Login");
+      if (userStore &&
+          userStore->getRegisterPolicy() == RegisterPolicy::AllowAll) {
+        TextureUtil::drawText(colorBuffer, startX + 4, startY + 5,
+                              "2. Register");
+      }
+
+      std::string prompt = "Select option: [ ";
+      prompt += m_inputLine.str();
+      prompt += " ]";
+      TextureUtil::drawText(colorBuffer, startX + 4, startY + 7, prompt);
+
+      std::string inst = "Press [Enter] to select";
+      int instX = startX + (boxW - (int)inst.length()) / 2;
+      TextureUtil::drawText(colorBuffer, instX, startY + 9, inst);
       break;
     }
 
     case State::InputUsername: {
-      std::string title =
-          m_isRegisterMode ? "[User Registration]" : "[User Login]";
-      drawText(colorBuffer, title, 2, 2);
-      drawText(colorBuffer, "Username: ", 2, 4);
-      drawText(colorBuffer, m_inputLine.str(), 12, 4);
+      TextureUtil::drawBox(colorBuffer, startX, startY, boxW, boxH);
+
+      std::string title = m_isRegisterMode ? "User Registration" : "User Login";
+      int titleX = startX + (boxW - (int)title.length()) / 2;
+      TextureUtil::drawText(colorBuffer, titleX, startY + 1, title);
+      TextureUtil::drawText(colorBuffer, startX, startY + 2,
+                            "+" + std::string(boxW - 2, '-') + "+");
+
+      TextureUtil::drawText(colorBuffer, startX + 4, startY + 4,
+                            "Enter Username:");
+
+      std::string inputField = "[ " + m_inputLine.str();
+      int fieldW = boxW - 8;
+      if ((int)inputField.length() < fieldW - 2) {
+        inputField += std::string(fieldW - 2 - inputField.length(), ' ');
+      }
+      inputField += " ]";
+      TextureUtil::drawText(colorBuffer, startX + 4, startY + 6, inputField);
+
+      std::string inst = "Press [Enter] to submit";
+      int instX = startX + (boxW - (int)inst.length()) / 2;
+      TextureUtil::drawText(colorBuffer, instX, startY + 9, inst);
       break;
     }
 
     case State::InputPassword: {
-      std::string title =
-          m_isRegisterMode ? "[User Registration]" : "[User Login]";
-      drawText(colorBuffer, title, 2, 2);
-      drawText(colorBuffer, "Username: " + m_username, 2, 4);
-      drawText(colorBuffer, "Password: ", 2, 5);
+      TextureUtil::drawBox(colorBuffer, startX, startY, boxW, boxH);
+
+      std::string title = m_isRegisterMode ? "User Registration" : "User Login";
+      int titleX = startX + (boxW - (int)title.length()) / 2;
+      TextureUtil::drawText(colorBuffer, titleX, startY + 1, title);
+      TextureUtil::drawText(colorBuffer, startX, startY + 2,
+                            "+" + std::string(boxW - 2, '-') + "+");
+
+      TextureUtil::drawText(colorBuffer, startX + 4, startY + 4,
+                            "Username: " + m_username);
+      TextureUtil::drawText(colorBuffer, startX + 4, startY + 5,
+                            "Enter Password:");
 
       std::string masked(m_inputLine.str().length(), '*');
-      drawText(colorBuffer, masked, 12, 5);
+      std::string inputField = "[ " + masked;
+      int fieldW = boxW - 8;
+      if ((int)inputField.length() < fieldW - 2) {
+        inputField += std::string(fieldW - 2 - inputField.length(), ' ');
+      }
+      inputField += " ]";
+      TextureUtil::drawText(colorBuffer, startX + 4, startY + 7, inputField);
+
+      std::string inst = "Press [Enter] to submit";
+      int instX = startX + (boxW - (int)inst.length()) / 2;
+      TextureUtil::drawText(colorBuffer, instX, startY + 9, inst);
       break;
     }
 
     case State::Verifying: {
-      std::string title =
-          m_isRegisterMode ? "[User Registration]" : "[User Login]";
-      drawText(colorBuffer, title, 2, 2);
-      drawText(colorBuffer, "Username: " + m_username, 2, 4);
-      drawText(colorBuffer, "Verifying... Please wait.", 2, 5);
+      TextureUtil::drawBox(colorBuffer, startX, startY, boxW, boxH);
+
+      std::string title = "Please Wait";
+      int titleX = startX + (boxW - (int)title.length()) / 2;
+      TextureUtil::drawText(colorBuffer, titleX, startY + 1, title);
+      TextureUtil::drawText(colorBuffer, startX, startY + 2,
+                            "+" + std::string(boxW - 2, '-') + "+");
+
+      char spinner[] = {'|', '/', '-', '\\'};
+      char current_spinner = spinner[(m_animFrame / 3) % 4];
+      std::string status =
+          std::string(1, current_spinner) + " Verifying credentials...";
+      int statusX = startX + (boxW - (int)status.length()) / 2;
+      TextureUtil::drawText(colorBuffer, statusX, startY + 4, status);
+
+      int barMaxW = boxW - 12;
+      int barProgress = (m_animFrame / 2) % (barMaxW + 1);
+      std::string bar = "[";
+      if (barProgress > 0) {
+        bar += std::string(barProgress - 1, '=') + ">";
+      }
+      bar += std::string(barMaxW - barProgress, ' ') + "]";
+      int barX = startX + (boxW - (int)bar.length()) / 2;
+      TextureUtil::drawText(colorBuffer, barX, startY + 6, bar);
+
+      std::string msg = "Processing secure hash...";
+      int msgX = startX + (boxW - (int)msg.length()) / 2;
+      TextureUtil::drawText(colorBuffer, msgX, startY + 8, msg);
       break;
     }
     }
@@ -197,25 +289,8 @@ private:
   std::string m_username = "";
   std::string m_password = "";
   std::future<bool> m_authFuture;
+  int m_animFrame = 0;
 
   astream::util::TextInputLine
       m_inputLine; // チャットでも使っている一行入力バッファ
-
-  // 簡易テキスト描画ヘルパー
-  void drawText(TextureView<char> &buffer, const std::string &text, int startX,
-                int startY) {
-    int x = startX;
-    int y = startY;
-    for (char c : text) {
-      if (c == '\n') {
-        x = startX;
-        y++;
-        continue;
-      }
-      if (x < buffer.width() && y < buffer.height()) {
-        buffer.at(x, y) = c;
-      }
-      x++;
-    }
-  }
 };
