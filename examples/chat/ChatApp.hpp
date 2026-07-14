@@ -1,7 +1,7 @@
 #pragma once
 #include <algorithm>
 #include <astream/InputDevice.hpp>
-#include <astream/Texture2D.hpp>
+#include <astream/graphics/Texture2D.hpp>
 #include <astream/util/TextInputLine.hpp>
 #include <astream/util/TextureUtil.hpp>
 #include <string>
@@ -16,6 +16,7 @@ class ChatWorld {
 private:
   bool m_frameChanged = false; // このフレーム内で変更があったか
   std::vector<int> m_kickFds;
+
 public:
   struct PlayerState {
     std::string name;
@@ -63,7 +64,9 @@ public:
       if (!msg.empty()) {
         if (msg.starts_with("/ban ")) {
           std::string target_name = msg.substr(5);
-          target_name.erase(std::remove(target_name.begin(), target_name.end(), ' '), target_name.end());
+          target_name.erase(
+              std::remove(target_name.begin(), target_name.end(), ' '),
+              target_name.end());
 
           int target_fd = -1;
           for (const auto &[fd, p] : m_players) {
@@ -74,9 +77,11 @@ public:
           }
           if (target_fd != -1) {
             m_kickFds.push_back(target_fd);
-            m_chatLog.push_back("*** System: " + target_name + " was banned by " + it->second.name + " ***");
+            m_chatLog.push_back("*** System: " + target_name +
+                                " was banned by " + it->second.name + " ***");
           } else {
-            m_chatLog.push_back("*** System: User " + target_name + " not found ***");
+            m_chatLog.push_back("*** System: User " + target_name +
+                                " not found ***");
           }
           markChanged();
         } else {

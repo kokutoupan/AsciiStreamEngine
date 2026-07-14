@@ -1,15 +1,16 @@
 #include "ChatApp.hpp"
-#include "astream/UserStore.hpp"
 #include <astream/Engine.hpp>
+#include <astream/auth/UserStore.hpp>
 #include <string_view>
 
 int main(int argc, char *argv[]) {
-  RegisterPolicy policy = RegisterPolicy::AllowAll;
+  astream::auth::RegisterPolicy policy =
+      astream::auth::RegisterPolicy::AllowAll;
   bool encrypt = false;
   for (int i = 1; i < argc; ++i) {
     std::string_view arg(argv[i]);
     if (arg == "--admin-only") {
-      policy = RegisterPolicy::AdminOnly;
+      policy = astream::auth::RegisterPolicy::AdminOnly;
     } else if (arg == "--encrypt") {
       encrypt = true;
     }

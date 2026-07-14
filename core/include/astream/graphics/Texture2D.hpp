@@ -6,6 +6,8 @@
 #include <mdspan>
 #include <vector>
 
+namespace astream::graphics {
+
 template <typename T> class TextureView;
 
 template <typename V, typename ValueType>
@@ -189,3 +191,9 @@ public:
     return this->view();
   }
 };
+
+} // namespace astream::graphics
+
+using astream::graphics::convertible_to_texture_view;
+using astream::graphics::Texture2D;
+using astream::graphics::TextureView;

@@ -7,7 +7,7 @@
 #include <string>
 #include <string_view>
 
-#include <astream/Texture2D.hpp>
+#include <astream/graphics/Texture2D.hpp>
 
 #include "./NetworkStreamClient.hpp"
 #include "./TerminalBuffer.hpp"

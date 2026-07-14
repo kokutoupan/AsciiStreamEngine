@@ -1,13 +1,15 @@
 #pragma once
-#include "astream/util/StringUtil.hpp"
 #include <algorithm>
-#include <astream/GraphicsDevice.hpp>
 #include <astream/InputDevice.hpp>
-#include <astream/UserStore.hpp>
+#include <astream/auth/UserStore.hpp>
+#include <astream/graphics/GraphicsDevice.hpp>
+#include <astream/util/StringUtil.hpp>
 #include <astream/util/TextInputLine.hpp>
 #include <astream/util/TextureUtil.hpp>
 #include <future>
 #include <string>
+
+namespace astream::auth {
 
 struct AuthResult {
   bool success = false;
@@ -294,3 +296,5 @@ private:
   astream::util::TextInputLine
       m_inputLine; // チャットでも使っている一行入力バッファ
 };
+
+} // namespace astream::auth

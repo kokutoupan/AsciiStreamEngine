@@ -13,8 +13,8 @@
 #include <vector>
 #include <zlib.h>
 
-#include <astream/AuthContext.hpp>
-#include <astream/UserStore.hpp>
+#include <astream/auth/AuthContext.hpp>
+#include <astream/auth/UserStore.hpp>
 #include <astream/net/EncryptedStream.hpp>
 #include <astream/net/NetworkUtil.hpp>
 
@@ -64,7 +64,7 @@ BOOL WINAPI ConsoleCtrlHandler(DWORD ctrlType) {
 
 #include <astream/Debug.hpp>
 #include <astream/InputDevice.hpp>
-#include <astream/Texture2D.hpp>
+#include <astream/graphics/Texture2D.hpp>
 
 template <typename T>
 concept IsGameWorld =
@@ -135,7 +135,7 @@ private:
   }
 
   bool m_enableAuth;
-  UserStore m_userStore;
+  astream::auth::UserStore m_userStore;
   int m_port;
   int m_serverSock = -1;
   bool m_enableEncryption = false;
@@ -172,7 +172,7 @@ private:
   // 認証中のセッション
   struct AuthenticatingSession {
     SessionCore core; // 共通要素
-    std::unique_ptr<AuthContext> authContext;
+    std::unique_ptr<astream::auth::AuthContext> authContext;
   };
 
   // 認証後のアクティブなセッション
@@ -188,7 +188,8 @@ private:
 
 public:
   Engine(int port = 12345, float targetFps = 30.0f, bool enableAuth = false,
-         RegisterPolicy policy = RegisterPolicy::AdminOnly,
+         astream::auth::RegisterPolicy policy =
+             astream::auth::RegisterPolicy::AdminOnly,
          bool enableEncryption = false)
       : m_enableAuth(enableAuth), m_port(port),
         m_targetFps(targetFps > 0.0f ? targetFps : 30.0f), m_userStore(policy),
@@ -504,7 +505,8 @@ public:
             } else {
               AuthenticatingSession session;
 
-              session.authContext = std::make_unique<AuthContext>(&m_userStore);
+              session.authContext =
+                  std::make_unique<astream::auth::AuthContext>(&m_userStore);
               session.core = std::move(sessionCore);
 
               m_authenticatingSessions[fd] = std::move(session);
@@ -589,7 +591,7 @@ public:
         int fd = authing.core.fd;
 
         // アップデート処理
-        const AuthResult &result =
+        const astream::auth::AuthResult &result =
             authing.authContext->update(fd, authing.core.input);
         const bool isDirty =
             authing.authContext->render(authing.core.colorBuffer->view());

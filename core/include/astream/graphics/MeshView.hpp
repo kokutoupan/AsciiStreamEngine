@@ -3,7 +3,7 @@
 #include <memory>
 #include <span>
 
-namespace astream {
+namespace astream::graphics {
 
 // ラスタライザが直接シークするための、最速・型消去されたメッシュ参照データ
 struct MeshView {
@@ -14,4 +14,8 @@ struct MeshView {
       nullptr; // メッシュ実体の寿命を延ばす安全弁
 };
 
+} // namespace astream::graphics
+
+namespace astream {
+using graphics::MeshView;
 } // namespace astream

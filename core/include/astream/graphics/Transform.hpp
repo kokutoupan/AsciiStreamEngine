@@ -2,7 +2,7 @@
 #include <glm/glm.hpp>
 #include <glm/gtc/matrix_transform.hpp>
 
-namespace astream {
+namespace astream::graphics {
 
 struct Transform {
   glm::vec3 position{0.0f}; ///< 位置 (X, Y, Z)
@@ -20,4 +20,8 @@ struct Transform {
   }
 };
 
+} // namespace astream::graphics
+
+namespace astream {
+using graphics::Transform;
 } // namespace astream

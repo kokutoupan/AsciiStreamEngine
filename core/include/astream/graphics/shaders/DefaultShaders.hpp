@@ -3,13 +3,13 @@
 #include <algorithm>
 #include <utility>
 
-#include <astream/Texture2D.hpp>
-#include <astream/shaders/ShaderUtil.hpp>
+#include <astream/graphics/Texture2D.hpp>
+#include <astream/graphics/shaders/ShaderUtil.hpp>
 
 #include <glm/glm.hpp>
 #include <glm/gtc/matrix_transform.hpp>
 
-namespace Shaders {
+namespace astream::graphics::shaders {
 
 /**
  * @brief Default vertex layout representing position, normal vector, and UV
@@ -103,4 +103,12 @@ inline void deferredLightingCS(int x, int y, TextureView<char> colorBuf,
   colorBuf.at(x, y) = mapIntensityToChar(col);
 }
 
+} // namespace astream::graphics::shaders
+
+namespace Shaders {
+using astream::graphics::shaders::DefaultVarying;
+using astream::graphics::shaders::DefaultVertex;
+using astream::graphics::shaders::deferredLightingCS;
+using astream::graphics::shaders::geometryVS;
+using astream::graphics::shaders::shadowVS;
 } // namespace Shaders

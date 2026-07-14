@@ -1,7 +1,7 @@
 #pragma once
 
 #include <astream/InputDevice.hpp>
-#include <astream/Texture2D.hpp>
+#include <astream/graphics/Texture2D.hpp>
 #include <string>
 
 // これを継承してもいいし，ちゃんとメゾットを満たしてさえいれば継承する必要はない
@@ -10,7 +10,8 @@ public:
   virtual ~ConnectionContext() = default;
 
   // 初期化フック
-  virtual void init(int clientId, int w, int h, const std::string &user_name, WorldType &world) = 0;
+  virtual void init(int clientId, int w, int h, const std::string &user_name,
+                    WorldType &world) = 0;
 
   // 切断時のクリーンアップフック
   virtual void onDisconnect(WorldType &world) = 0;

@@ -8,7 +8,9 @@
 
 #include <glm/glm.hpp>
 
-#include <astream/Texture2D.hpp>
+#include <astream/graphics/Texture2D.hpp>
+
+namespace astream::graphics {
 
 template <typename T>
 concept IsVarying = requires(T a, T b, float s) {
@@ -410,3 +412,11 @@ public:
 
   ComputePass create_compute_pass() { return ComputePass(); }
 };
+
+} // namespace astream::graphics
+
+using astream::graphics::GraphicsDevice;
+using astream::graphics::IsComputeShader;
+using astream::graphics::IsFragmentShader;
+using astream::graphics::IsVarying;
+using astream::graphics::IsVertexShader;

@@ -1,8 +1,7 @@
 #pragma once
-
 #include <string_view>
 
-namespace Shaders {
+namespace astream::graphics::shaders {
 
 /**
  * @brief Maps a lighting intensity float value [0.0, 1.0] to a corresponding
@@ -24,4 +23,8 @@ inline char mapIntensityToChar(float intensity) {
   return palette[idx];
 }
 
+} // namespace astream::graphics::shaders
+
+namespace Shaders {
+using astream::graphics::shaders::mapIntensityToChar;
 } // namespace Shaders

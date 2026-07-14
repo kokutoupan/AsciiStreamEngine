@@ -1,6 +1,6 @@
 #pragma once
 
-#include <astream/shaders/DefaultShaders.hpp>
+#include <astream/graphics/shaders/DefaultShaders.hpp>
 #include <cstdint>
 #include <glm/glm.hpp>
 #include <vector>

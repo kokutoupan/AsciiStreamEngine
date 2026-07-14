@@ -13,6 +13,8 @@
 
 #include <astream/util/StringUtil.hpp>
 
+namespace astream::auth {
+
 // ユーザー登録のポリシー
 enum class RegisterPolicy {
   AllowAll,  // 誰でも自由に登録可能
@@ -228,3 +230,5 @@ private:
                            password.size()) == ARGON2_OK;
   }
 };
+
+} // namespace astream::auth

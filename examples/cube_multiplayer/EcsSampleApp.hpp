@@ -12,11 +12,11 @@
 
 #include <astream/ConnectionContext.hpp>
 #include <astream/GameWorld.hpp>
-#include <astream/GraphicsDevice.hpp>
-#include <astream/MeshView.hpp>
-#include <astream/Texture2D.hpp>
-#include <astream/Transform.hpp>
-#include <astream/shaders/DefaultShaders.hpp>
+#include <astream/graphics/GraphicsDevice.hpp>
+#include <astream/graphics/MeshView.hpp>
+#include <astream/graphics/Texture2D.hpp>
+#include <astream/graphics/Transform.hpp>
+#include <astream/graphics/shaders/DefaultShaders.hpp>
 
 #include <astream/util/MeshUtil.hpp>
 #include <astream/util/TextureUtil.hpp>

@@ -7,9 +7,9 @@
 #include <thread>
 #include <vector>
 
-#include <astream/GraphicsDevice.hpp>
-#include <astream/Texture2D.hpp>
-#include <astream/shaders/DefaultShaders.hpp>
+#include <astream/graphics/GraphicsDevice.hpp>
+#include <astream/graphics/Texture2D.hpp>
+#include <astream/graphics/shaders/DefaultShaders.hpp>
 #include <glm/glm.hpp>
 #include <glm/gtc/matrix_transform.hpp>
 
@@ -118,8 +118,10 @@ int main() {
     // ==========================================
     // PASS 2: ジオメトリパス (Gバッファへの書き込み)
     // ==========================================
-    auto geometryPass = device.create_rasterize_pass<
-        Shaders::DefaultVertex, Shaders::DefaultVarying, float>(cameraDepth.view());
+    auto geometryPass =
+        device.create_rasterize_pass<Shaders::DefaultVertex,
+                                     Shaders::DefaultVarying, float>(
+            cameraDepth.view());
 
     // 2-1. 床
 
