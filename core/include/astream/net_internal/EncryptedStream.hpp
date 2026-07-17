@@ -5,7 +5,7 @@
 
 #include <monocypher.h>
 
-namespace astream::net {
+namespace astream::detail::net {
 
 class EncryptedStream {
 public:
@@ -110,4 +110,4 @@ private:
   uint64_t rx_counter;
 };
 
-} // namespace astream::net
+} // namespace astream::detail::net

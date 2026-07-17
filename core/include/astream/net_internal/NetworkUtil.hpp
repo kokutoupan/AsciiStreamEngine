@@ -23,7 +23,7 @@
 #include <unistd.h>
 #endif
 
-namespace astream::net {
+namespace astream::detail::net {
 
 // エラーが「データがまだ届いてないだけ（正常）」かどうかを判定するヘルパー
 inline bool IsWouldBlock() {
@@ -128,4 +128,4 @@ inline int recv_encrypted_frame(int fd, EncryptedStream &stream,
   return (int)out_plain.size();
 }
 
-} // namespace astream::net
+} // namespace astream::detail::net

@@ -14,7 +14,9 @@
 #include <astream/auth/RegisterPolicy.hpp>
 #include <astream/util/StringUtil.hpp>
 
-namespace astream::auth {
+namespace astream::detail::auth {
+
+using astream::auth::RegisterPolicy;
 
 enum class AccountStatus { Active, Banned };
 
@@ -225,4 +227,4 @@ private:
   }
 };
 
-} // namespace astream::auth
+} // namespace astream::detail::auth

@@ -10,7 +10,9 @@
 #include <astream/util/TextInputLine.hpp>
 #include <astream/util/TextureUtil.hpp>
 
-namespace astream::auth {
+namespace astream::detail::auth {
+
+using astream::auth::RegisterPolicy;
 
 struct AuthResult {
   bool success = false;
@@ -298,4 +300,4 @@ private:
       m_inputLine; // チャットでも使っている一行入力バッファ
 };
 
-} // namespace astream::auth
+} // namespace astream::detail::auth

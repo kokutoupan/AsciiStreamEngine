@@ -34,7 +34,7 @@ struct NetworkStreamClient::Impl {
   struct addrinfo *addr_res = nullptr;
   bool wsa_initialized = false;
 
-  astream::net::EncryptedStream stream;
+  astream::detail::net::EncryptedStream stream;
   std::vector<uint8_t> decrypted_recv_buffer;
   size_t decrypted_recv_offset = 0;
 
@@ -197,12 +197,12 @@ bool NetworkStreamClient::connect(const std::string &host,
     std::memcpy(rx_base_nonce, rx_nonce_buf, 24);
 
     pImpl->stream.initialize_encryption(
-        astream::net::EncryptedStream::Mode::Encrypted, shared_key,
+        astream::detail::net::EncryptedStream::Mode::Encrypted, shared_key,
         tx_base_nonce, rx_base_nonce);
   } else {
     uint8_t dummy[32] = {0};
     pImpl->stream.initialize_encryption(
-        astream::net::EncryptedStream::Mode::Plaintext, dummy, dummy, dummy);
+        astream::detail::net::EncryptedStream::Mode::Plaintext, dummy, dummy, dummy);
   }
 
   return true;
@@ -255,7 +255,7 @@ static int recv_exact_raw(intptr_t fd, void *buf, size_t len) {
 
 int NetworkStreamClient::send_data(const void *buf, size_t len) {
   if (pImpl->stream.get_mode() ==
-      astream::net::EncryptedStream::Mode::Plaintext) {
+      astream::detail::net::EncryptedStream::Mode::Plaintext) {
     return send_data_raw(pImpl->fd, buf, len);
   } else {
     std::vector<uint8_t> wrapped =
@@ -269,7 +269,7 @@ int NetworkStreamClient::send_data(const void *buf, size_t len) {
 
 int NetworkStreamClient::recv_data(void *buf, size_t len) {
   if (pImpl->stream.get_mode() ==
-      astream::net::EncryptedStream::Mode::Plaintext) {
+      astream::detail::net::EncryptedStream::Mode::Plaintext) {
     return recv_data_raw(pImpl->fd, buf, len);
   } else {
     if (pImpl->decrypted_recv_buffer.empty()) {
@@ -292,7 +292,7 @@ int NetworkStreamClient::recv_data(void *buf, size_t len) {
 
 int NetworkStreamClient::recv_exact(void *buf, size_t len) {
   if (pImpl->stream.get_mode() ==
-      astream::net::EncryptedStream::Mode::Plaintext) {
+      astream::detail::net::EncryptedStream::Mode::Plaintext) {
     size_t recvd = 0;
     char *p = (char *)buf;
     while (recvd < len) {
@@ -332,7 +332,7 @@ bool NetworkStreamClient::send_window_size(uint16_t w, uint16_t h) {
 int NetworkStreamClient::recv_packet_header(uint32_t &out_len, uint8_t &out_w,
                                             uint8_t &out_h) {
   if (pImpl->stream.get_mode() ==
-      astream::net::EncryptedStream::Mode::Plaintext) {
+      astream::detail::net::EncryptedStream::Mode::Plaintext) {
     uint32_t net_len;
     int n = recv_exact_raw(pImpl->fd, &net_len, 4);
     if (n <= 0)

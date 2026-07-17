@@ -154,12 +154,13 @@ private:
   int m_port;
   int m_serverSock = -1;
 
-  using UserStoreType = std::conditional_t<Setting.enable_auth, auth::UserStore,
-                                           detail::EmptyMember>;
+  using UserStoreType =
+      std::conditional_t<Setting.enable_auth, detail::auth::UserStore,
+                         detail::EmptyMember>;
 
   [[no_unique_address]] UserStoreType m_userStore;
 
-  std::unordered_map<int, net::EncryptedStream> m_pendingStreams;
+  std::unordered_map<int, detail::net::EncryptedStream> m_pendingStreams;
 
   struct HandshakeSession {
     int fd;
@@ -191,13 +192,13 @@ private:
     std::string user_name;
     std::unique_ptr<astream::graphics::Texture2D<char>> colorBuffer;
     std::vector<uint8_t> compressedBuffer;
-    astream::net::EncryptedStream stream;
+    astream::detail::net::EncryptedStream stream;
   };
 
   // 認証中のセッション
   struct AuthenticatingSession {
     SessionCore core; // 共通要素
-    std::unique_ptr<astream::auth::AuthContext> authContext;
+    std::unique_ptr<astream::detail::auth::AuthContext> authContext;
   };
 
   // 認証後のアクティブなセッション
@@ -342,10 +343,10 @@ public:
             uint8_t mode_byte = 0; // Plaintext
             send(client_sock, (const char *)&mode_byte, 1, 0);
             uint8_t dummy[32] = {0};
-            astream::net::EncryptedStream stream;
+            astream::detail::net::EncryptedStream stream;
             stream.initialize_encryption(
-                astream::net::EncryptedStream::Mode::Plaintext, dummy, dummy,
-                dummy);
+                astream::detail::net::EncryptedStream::Mode::Plaintext, dummy,
+                dummy, dummy);
             m_pendingStreams[client_sock] = std::move(stream);
           }
 
@@ -405,15 +406,16 @@ public:
                       16);
                   std::memcpy(rx_base_nonce, rx_nonce_buf, 24);
 
-                  astream::net::EncryptedStream stream;
+                  astream::detail::net::EncryptedStream stream;
                   stream.initialize_encryption(
-                      astream::net::EncryptedStream::Mode::Encrypted,
+                      astream::detail::net::EncryptedStream::Mode::Encrypted,
                       shared_key, tx_base_nonce, rx_base_nonce);
 
                   m_pendingStreams[fd] = std::move(stream);
                   m_handshakes.erase(handshake_it);
                 }
-              } else if (n == 0 || (n < 0 && !astream::net::IsWouldBlock())) {
+              } else if (n == 0 ||
+                         (n < 0 && !astream::detail::net::IsWouldBlock())) {
                 close(fd);
                 m_handshakes.erase(handshake_it);
                 m_pollFds[i] = m_pollFds.back();
@@ -446,13 +448,13 @@ public:
               --i;
               continue;
             }
-            astream::net::EncryptedStream &stream = it_stream->second;
+            astream::detail::net::EncryptedStream &stream = it_stream->second;
 
             int w = 0;
             int h = 0;
 
             if (stream.get_mode() ==
-                astream::net::EncryptedStream::Mode::Plaintext) {
+                astream::detail::net::EncryptedStream::Mode::Plaintext) {
               uint16_t size_packet[2];
 #if defined(_WIN32)
               int len =
@@ -461,11 +463,12 @@ public:
               int len = recv(fd, (char *)size_packet, sizeof(size_packet),
                              MSG_PEEK | MSG_DONTWAIT);
 #endif
-              if (len < 0 && astream::net::IsWouldBlock()) {
+              if (len < 0 && astream::detail::net::IsWouldBlock()) {
                 continue;
               }
               if (len < (int)sizeof(size_packet)) {
-                if (len == 0 || (len < 0 && !astream::net::IsWouldBlock())) {
+                if (len == 0 ||
+                    (len < 0 && !astream::detail::net::IsWouldBlock())) {
                   close(fd);
                   m_pendingStreams.erase(it_stream);
                   m_pollFds[i] = m_pollFds.back();
@@ -479,8 +482,8 @@ public:
               h = ntohs(size_packet[1]);
             } else {
               std::vector<uint8_t> out_plain;
-              int len = astream::net::recv_encrypted_frame<Setting>(fd, stream,
-                                                                    out_plain);
+              int len = astream::detail::net::recv_encrypted_frame<Setting>(
+                  fd, stream, out_plain);
               if (len == 0) {
                 continue;
               }
@@ -533,14 +536,15 @@ public:
               AuthenticatingSession session;
 
               session.authContext =
-                  std::make_unique<astream::auth::AuthContext>(&m_userStore);
+                  std::make_unique<astream::detail::auth::AuthContext>(
+                      &m_userStore);
               session.core = std::move(sessionCore);
 
               m_authenticatingSessions[fd] = std::move(session);
               continue;
             }
           } else {
-            astream::net::EncryptedStream &stream =
+            astream::detail::net::EncryptedStream &stream =
                 (activeSession_it != m_sessions.end())
                     ? activeSession_it->second.core.stream
                     : authing_it->second.core.stream;
@@ -548,7 +552,7 @@ public:
             bool disconnect = false;
 
             if (stream.get_mode() ==
-                astream::net::EncryptedStream::Mode::Plaintext) {
+                astream::detail::net::EncryptedStream::Mode::Plaintext) {
               char recv_buf[64];
 #if defined(_WIN32)
               int n = recv(fd, recv_buf, sizeof(recv_buf), 0);
@@ -563,14 +567,15 @@ public:
                     authing_it->second.core.input.pressKey(recv_buf[j]);
                   }
                 }
-              } else if (n == 0 || (n < 0 && !astream::net::IsWouldBlock())) {
+              } else if (n == 0 ||
+                         (n < 0 && !astream::detail::net::IsWouldBlock())) {
                 disconnect = true;
               }
             } else {
               while (true) {
                 std::vector<uint8_t> out_plain;
-                int n = astream::net::recv_encrypted_frame<Setting>(fd, stream,
-                                                                    out_plain);
+                int n = astream::detail::net::recv_encrypted_frame<Setting>(
+                    fd, stream, out_plain);
                 if (n > 0) {
                   for (size_t j = 0; j < out_plain.size(); ++j) {
                     if (activeSession_it != m_sessions.end()) {
@@ -618,13 +623,13 @@ public:
         int fd = authing.core.fd;
 
         // アップデート処理
-        const astream::auth::AuthResult &result =
+        const astream::detail::auth::AuthResult &result =
             authing.authContext->update(fd, authing.core.input);
         const bool isDirty =
             authing.authContext->render(authing.core.colorBuffer->view());
 
         if (isDirty)
-          astream::net::send_engine_frame_compressed(
+          astream::detail::net::send_engine_frame_compressed(
               authing.core.fd, authing.core.colorBuffer->data(),
               authing.core.colorBuffer->size(), authing.core.width,
               authing.core.height, authing.core.compressedBuffer,
@@ -704,7 +709,7 @@ public:
                       // [B]
                       // 圧縮と送信（スレッドごとに個別に実行されるため、重いcompressが並列化される）
                       if (should_send) {
-                        astream::net::send_engine_frame_compressed(
+                        astream::detail::net::send_engine_frame_compressed(
                             session.core.fd, session.core.colorBuffer->data(),
                             session.core.colorBuffer->size(),
                             session.core.width, session.core.height,
