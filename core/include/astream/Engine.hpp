@@ -16,10 +16,10 @@
 
 #include <astream/Config.hpp>
 
-#include <astream/detail/auth/AuthContext.hpp>
-#include <astream/detail/auth/UserStore.hpp>
-#include <astream/detail/net/EncryptedStream.hpp>
-#include <astream/detail/net/NetworkUtil.hpp>
+#include <astream/auth_internal/AuthContext.hpp>
+#include <astream/auth_internal/UserStore.hpp>
+#include <astream/net_internal/EncryptedStream.hpp>
+#include <astream/net_internal/NetworkUtil.hpp>
 
 // =============================================================================
 // OS固有のネットワーク・システムコールヘッダーの切り替え

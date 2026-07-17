@@ -28,12 +28,10 @@ if(NOT TARGET argon2)
   endif()
 endif()
 
-add_library(astream_core STATIC
-  src/dummy.cpp
-)
+add_library(astream_core INTERFACE)
 
 if(USE_PROFILER)
-  target_compile_definitions(astream_core PUBLIC ENABLE_PROFILER)
+  target_compile_definitions(astream_core INTERFACE ENABLE_PROFILER)
   message(STATUS "Loop Profiler: ENABLED")
 else()
   message(STATUS "Loop Profiler: DISABLED")
@@ -41,21 +39,30 @@ endif()
 
 if(WIN32)
   target_link_libraries(astream_core
-    PUBLIC
+    INTERFACE
       glm::glm
       ${LIBS}
       ZLIB::ZLIB
       argon2
-    PRIVATE winmm )
+      winmm )
 else()
   target_link_libraries(astream_core
-    PUBLIC
+    INTERFACE
       glm::glm
       ${LIBS}
       ZLIB::ZLIB
       argon2 )
 endif()
-target_include_directories(astream_core PUBLIC
+
+file(GLOB_RECURSE ASTREAM_HEADERS
+    CONFIGURE_DEPENDS
+    "${CMAKE_CURRENT_SOURCE_DIR}/include/*.hpp"
+)
+target_sources(astream_core
+    INTERFACE
+        ${ASTREAM_HEADERS}
+)
+target_include_directories(astream_core INTERFACE
   ${CMAKE_CURRENT_SOURCE_DIR}/include
   $<BUILD_INTERFACE:${CMAKE_SOURCE_DIR}/util/include>
 )

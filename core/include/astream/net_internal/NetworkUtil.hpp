@@ -5,9 +5,7 @@
 #include <zlib.h>
 
 #include <astream/Config.hpp>
-#include <astream/detail/net/EncryptedStream.hpp>
-
-// OS固有のネットワーク・システムコールヘッダーの切り替え
+#include <astream/net_internal/EncryptedStream.hpp> // OS固有のネットワーク・システムコールヘッダーの切り替え
 #if defined(_WIN32) || defined(_WIN64)
 #ifndef WIN32_LEAN_AND_MEAN
 #define WIN32_LEAN_AND_MEAN

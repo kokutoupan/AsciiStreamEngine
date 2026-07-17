@@ -1,13 +1,14 @@
 #pragma once
 #include <algorithm>
+#include <future>
+#include <string>
+
 #include <astream/InputDevice.hpp>
-#include <astream/detail/auth/UserStore.hpp>
+#include <astream/auth_internal/UserStore.hpp>
 #include <astream/graphics/GraphicsDevice.hpp>
 #include <astream/util/StringUtil.hpp>
 #include <astream/util/TextInputLine.hpp>
 #include <astream/util/TextureUtil.hpp>
-#include <future>
-#include <string>
 
 namespace astream::auth {
 

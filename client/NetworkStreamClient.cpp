@@ -9,7 +9,7 @@
 
 #include <monocypher.h>
 
-#include <astream/detail/net/EncryptedStream.hpp>
+#include <astream/net_internal/EncryptedStream.hpp>
 
 // OS依存ヘッダー
 #if defined(_WIN32) || defined(_WIN64)
