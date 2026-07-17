@@ -1,3 +1,4 @@
+#include <csignal>
 #include <cstdint>
 #include <format>
 #include <iostream>
@@ -6,6 +7,15 @@
 #include <span>
 #include <string>
 #include <string_view>
+
+#if defined(_WIN32)
+#define NOMINMAX
+#define WIN32_LEAN_AND_MEAN
+#include <windows.h>
+#else
+#include <cstring>
+#include <signal.h>
+#endif
 
 #include <astream/graphics/Texture2D.hpp>
 
@@ -24,10 +34,42 @@ constexpr std::string_view HOST_DOMAIN = "localhost";
 #define USE_ASYNC_KEY_STATE 0
 #endif
 
+volatile std::sig_atomic_t g_exit_requested = 0;
+
+#if defined(_WIN32)
+BOOL WINAPI ConsoleCtrlHandler(DWORD ctrlType) {
+  switch (ctrlType) {
+  case CTRL_C_EVENT:
+  case CTRL_BREAK_EVENT:
+  case CTRL_CLOSE_EVENT:
+    g_exit_requested = 1;
+    return TRUE;
+  default:
+    return FALSE;
+  }
+}
+#else
+void posix_signal_handler(int sig) { g_exit_requested = 1; }
+#endif
+
 // =============================================================================
 // メイン関数
 // =============================================================================
 int main(int argc, char *argv[]) {
+#if defined(_WIN32)
+  SetConsoleCtrlHandler(ConsoleCtrlHandler, TRUE);
+#else
+  struct sigaction sa;
+  std::memset(&sa, 0, sizeof(sa));
+  sa.sa_handler = posix_signal_handler;
+  sa.sa_flags = 0; // Clear SA_RESTART
+  sigemptyset(&sa.sa_mask);
+  sigaction(SIGINT, &sa, nullptr);
+  sigaction(SIGTERM, &sa, nullptr);
+  sigaction(SIGHUP, &sa, nullptr);
+  sigaction(SIGQUIT, &sa, nullptr);
+#endif
+
   std::string unique_title;
 #if defined(_WIN32)
   // 1. ハードウェア由来のシードを使ってメルセンヌ・ツイスタ乱数生成器を初期化
@@ -97,7 +139,7 @@ int main(int argc, char *argv[]) {
   term.start_input_thread(client);
 #endif
 
-  while (1) {
+  while (!g_exit_requested) {
     int timeout = -1;
 #if defined(_WIN32) && USE_ASYNC_KEY_STATE
     term.scan_and_send_keys(client);
@@ -105,7 +147,7 @@ int main(int argc, char *argv[]) {
 #endif
 
     int event_type = term.poll_events(client, timeout);
-    if (event_type < 0) {
+    if (g_exit_requested || event_type < 0) {
       break;
     }
 

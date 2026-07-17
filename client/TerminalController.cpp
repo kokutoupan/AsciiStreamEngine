@@ -37,6 +37,9 @@ struct TerminalController::Impl {
 TerminalController::TerminalController() : pImpl(std::make_unique<Impl>()) {}
 
 TerminalController::~TerminalController() {
+
+  std::cout << "\033[2J\033[1;1H\033[?1049l\033[?25h" << std::flush;
+
   disable_raw_mode();
 #if defined(_WIN32)
   if (pImpl->thread_running && pImpl->input_thread.joinable()) {
@@ -76,6 +79,7 @@ void TerminalController::enable_raw_mode() {
   raw.c_lflag &= ~(ECHO | ICANON);
   tcsetattr(STDIN_FILENO, TCSAFLUSH, &raw);
 #endif
+  std::cout << "\033[?1049h\033[?25l" << std::flush;
 }
 
 void TerminalController::disable_raw_mode() {
@@ -222,7 +226,11 @@ int TerminalController::poll_events(NetworkStreamClient &client,
   fds[0].fd = static_cast<SOCKET>(socket_handle);
   fds[0].events = POLLIN;
 
-  int ret = WSAPoll(fds, 1, timeout_ms);
+  int actual_timeout = timeout_ms;
+  if (actual_timeout == -1) {
+    actual_timeout = 100;
+  }
+  int ret = WSAPoll(fds, 1, actual_timeout);
   if (ret < 0)
     return -1;
   if (ret == 0)
